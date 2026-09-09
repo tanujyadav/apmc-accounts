@@ -39,3 +39,4 @@ jobs:
           git add backups
           git diff --cached --quiet && echo "No changes to commit" || git commit -m "chore: daily database backup $(date -u +%Y-%m-%d)"
           git push
+
