@@ -1,0 +1,41 @@
+name: Daily database backup
+
+on:
+  schedule:
+    # 20:00 UTC = 01:30 IST — runs once a day, free on GitHub Actions
+    - cron: "0 20 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install postgresql-client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Dump database
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          mkdir -p backups
+          STAMP=$(date -u +%Y-%m-%d)
+          pg_dump "$DATABASE_URL" --no-owner --no-privileges | gzip > "backups/apmc-backup-$STAMP.sql.gz"
+
+      - name: Delete backups older than 90 days
+        run: |
+          find backups -name '*.sql.gz' -mtime +90 -delete
+
+      - name: Commit backup
+        run: |
+          git config user.name "apmc-backup-bot"
+          git config user.email "actions@github.com"
+          git add backups
+          git diff --cached --quiet && echo "No changes to commit" || git commit -m "chore: daily database backup $(date -u +%Y-%m-%d)"
+          git push

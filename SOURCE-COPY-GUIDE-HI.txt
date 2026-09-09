@@ -1,0 +1,56 @@
+APMC Accounts Software — Source Copy & Installation Guide
+=========================================================
+
+इस ZIP में application का पूरा source code है।
+असली .env, password, node_modules और temporary build files शामिल नहीं हैं।
+
+A. Source code अपने computer में copy करें
+------------------------------------------
+1. ZIP download करें।
+2. ZIP पर Right Click > Extract All करें।
+3. निकले हुए folder को सुरक्षित drive में रखें, जैसे D:\APMC-Accounts.
+4. इस ZIP की एक दूसरी copy Pen Drive/Google Drive में backup रखें।
+
+B. Developer/IT person को क्या देना है
+--------------------------------------
+Extract किया हुआ पूरा folder दें और कहें:
+- Next.js application deploy करनी है (Vercel free/Hobby plan पर्याप्त है)
+- PostgreSQL database लगाना है (Neon free tier पर्याप्त है — कोई paid plan जरूरी नहीं)
+- .env.example की copy बनाकर .env तैयार करनी है, जिसमें अब login के लिए
+  AUTH_USERNAME, AUTH_PASSWORD, AUTH_SECRET भी सेट करना है (app में built-in
+  login page है — यह सब production values Vercel के Environment Variables में डालें)
+- npx drizzle-kit push चलाना है
+- database/ledger-heads-template.sql import करना है
+- daily database backup — free में .github/workflows/backup.yml पहले से शामिल है;
+  बस GitHub repo के Settings > Secrets में DATABASE_URL add करें और Actions चालू रखें,
+  यह हर रोज अपने आप backup लेकर repo के backups/ folder में save कर देगा (कोई paid service नहीं चाहिए)
+
+C. Local computer पर technical installation
+-------------------------------------------
+Required: Node.js 20+, PostgreSQL 15+
+
+1. Project folder में terminal खोलें।
+2. npm install चलाएँ।
+3. .env.example की copy का नाम .env रखें।
+4. .env में अपना PostgreSQL DATABASE_URL, और AUTH_USERNAME/AUTH_PASSWORD/AUTH_SECRET डालें।
+5. npx drizzle-kit push चलाएँ।
+6. ledger heads के लिए database/ledger-heads-template.sql import करें।
+7. npm run build चलाएँ।
+8. npm run start चलाएँ।
+9. Browser में http://localhost:3000 खोलें — अब login page सबसे पहले खुलेगा,
+   .env में डाले गए AUTH_USERNAME/AUTH_PASSWORD से login करें।
+
+D. जरूरी बात
+------------
+Source ZIP में रोज की नई accounting entries अपने आप update नहीं होतीं।
+Actual office data PostgreSQL database में रहता है। उसका daily backup .github/workflows/backup.yml
+से अपने आप हो जाता है (ऊपर section B देखें)।
+Permanent online use के लिए Vercel (free Hobby plan) + Neon (free PostgreSQL) + custom domain
+इस्तेमाल करें — पूरी तरह free में चल सकता है, कोई paid plan जरूरी नहीं।
+
+E. Free-tier की सीमाएँ (जानकारी के लिए)
+---------------------------------------
+- Neon free tier: थोड़ी देर इस्तेमाल न होने पर database "sleep" हो जाता है, अगली request पर
+  कुछ सेकंड में अपने आप जाग जाता है — normal है, कोई नुकसान नहीं।
+- Vercel free/Hobby plan व्यक्तिगत/non-commercial उपयोग के लिए है; सरकारी/संस्थागत उपयोग में
+  आगे चलकर जरूरत पड़े तो Vercel का Pro plan देखना पड़ सकता है — अभी शुरुआत free से ही करें।
