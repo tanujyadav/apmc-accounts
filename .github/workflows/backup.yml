@@ -17,16 +17,27 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install postgresql-client
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: Install postgresql-client (matches Neon's server version)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y postgresql-client-17
 
       - name: Dump database
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
+          set -euo pipefail
           mkdir -p backups
           STAMP=$(date -u +%Y-%m-%d)
           pg_dump "$DATABASE_URL" --no-owner --no-privileges | gzip > "backups/apmc-backup-$STAMP.sql.gz"
+          # Fail loudly instead of committing an empty/near-empty dump.
+          SIZE=$(stat -c%s "backups/apmc-backup-$STAMP.sql.gz")
+          if [ "$SIZE" -lt 200 ]; then
+            echo "::error::Backup file is suspiciously small ($SIZE bytes) — pg_dump likely produced no data."
+            exit 1
+          fi
 
       - name: Delete backups older than 90 days
         run: |
