@@ -9,6 +9,13 @@ import {
   timestamp,
 } from "drizzle-orm/pg-core";
 
+// Application security settings. Only a one-way PIN hash is stored.
+export const appSecuritySettings = pgTable("app_security_settings", {
+  id: serial("id").primaryKey(),
+  pinHash: text("pin_hash").notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 // APMC / Mandi Samiti profile (single-row settings)
 export const apmcProfile = pgTable("apmc_profile", {
   id: serial("id").primaryKey(),
@@ -113,6 +120,7 @@ export const cheques = pgTable("cheques", {
   amount: numeric("amount", { precision: 14, scale: 2 }).notNull(),
   direction: text("direction").notNull(), // issued | received
   status: text("status").notNull().default("pending"), // pending | cleared | bounced | cancelled
+  clearedDate: date("cleared_date"),
   remarks: text("remarks"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
@@ -120,9 +128,10 @@ export const cheques = pgTable("cheques", {
 // Month-wise Bank Reconciliation Statement manual adjustments
 export const brsStatements = pgTable("brs_statements", {
   id: serial("id").primaryKey(),
-  bankAccountId: integer("bank_account_id")
-    .notNull()
-    .references(() => bankAccounts.id, { onDelete: "cascade" }),
+  // Null means the statutory BRS covers all APMC bank accounts together.
+  bankAccountId: integer("bank_account_id").references(() => bankAccounts.id, {
+    onDelete: "cascade",
+  }),
   statementMonth: text("statement_month").notNull(), // YYYY-MM
   bankInterest: numeric("bank_interest", { precision: 14, scale: 2 })
     .notNull()
@@ -140,6 +149,32 @@ export const brsStatements = pgTable("brs_statements", {
     .notNull()
     .default("0"),
   passbookBalance: numeric("passbook_balance", { precision: 14, scale: 2 })
+    .notNull()
+    .default("0"),
+  cashbookBalanceSnapshot: numeric("cashbook_balance_snapshot", { precision: 14, scale: 2 })
+    .notNull()
+    .default("0"),
+  unpresentedChequesSnapshot: numeric("unpresented_cheques_snapshot", { precision: 14, scale: 2 })
+    .notNull()
+    .default("0"),
+  unpresentedCountSnapshot: integer("unpresented_count_snapshot").notNull().default(0),
+  unclearedDepositsSnapshot: numeric("uncleared_deposits_snapshot", { precision: 14, scale: 2 })
+    .notNull()
+    .default("0"),
+  unclearedCountSnapshot: integer("uncleared_count_snapshot").notNull().default(0),
+  totalAdditionsSnapshot: numeric("total_additions_snapshot", { precision: 14, scale: 2 })
+    .notNull()
+    .default("0"),
+  balanceAfterAdditionsSnapshot: numeric("balance_after_additions_snapshot", { precision: 14, scale: 2 })
+    .notNull()
+    .default("0"),
+  totalDeductionsSnapshot: numeric("total_deductions_snapshot", { precision: 14, scale: 2 })
+    .notNull()
+    .default("0"),
+  calculatedBalanceSnapshot: numeric("calculated_balance_snapshot", { precision: 14, scale: 2 })
+    .notNull()
+    .default("0"),
+  differenceSnapshot: numeric("difference_snapshot", { precision: 14, scale: 2 })
     .notNull()
     .default("0"),
   remarks: text("remarks"),
@@ -167,9 +202,14 @@ export const cashDepositAllocations = pgTable("cash_deposit_allocations", {
   cashDepositId: integer("cash_deposit_id")
     .notNull()
     .references(() => cashDeposits.id, { onDelete: "cascade" }),
-  cashbookEntryId: integer("cashbook_entry_id")
-    .notNull()
-    .references(() => cashbookEntries.id, { onDelete: "cascade" }),
+  cashbookEntryId: integer("cashbook_entry_id").references(
+    () => cashbookEntries.id,
+    { onDelete: "cascade" },
+  ),
+  cashbookOpeningBalanceId: integer("cashbook_opening_balance_id").references(
+    () => cashbookOpeningBalances.id,
+    { onDelete: "cascade" },
+  ),
   allocatedAmount: numeric("allocated_amount", { precision: 14, scale: 2 }).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });

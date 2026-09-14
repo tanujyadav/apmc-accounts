@@ -9,15 +9,49 @@ import {
   ledgerHeads,
   apmcProfile,
 } from "@/db/schema";
-import { desc } from "drizzle-orm";
-import { inr, num, fmtDate, currentFY } from "@/lib/format";
-import { StatCard, Card, Th, Td, Badge, EmptyRow } from "@/components/ui";
+import { inr, num, currentFY } from "@/lib/format";
+import { StatCard } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
 
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ month?: string }>;
+}) {
+  const { month } = await searchParams;
+  const currentMonth = new Date().toISOString().slice(0, 7);
+  const [currentYear, currentMonthNumber] = currentMonth.split("-").map(Number);
+  const currentFinancialYearStart =
+    currentMonthNumber >= 4 ? currentYear : currentYear - 1;
+  const monthGroups = [currentFinancialYearStart, currentFinancialYearStart - 1].map(
+    (financialYearStart) => ({
+      financialYear: `${financialYearStart}-${String(financialYearStart + 1).slice(-2)}`,
+      options: Array.from({ length: 12 }, (_, index) => {
+        const date = new Date(Date.UTC(financialYearStart, 3 + index, 1));
+        return {
+          value: `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`,
+          label: date.toLocaleDateString("en-IN", {
+            month: "long",
+            year: "numeric",
+            timeZone: "UTC",
+          }),
+        };
+      }),
+    }),
+  );
+  const allowedMonths = new Set(
+    monthGroups.flatMap((group) => group.options.map((option) => option.value)),
+  );
+  const requestedMonth = /^\d{4}-\d{2}$/.test(month ?? "")
+    ? month!
+    : currentMonth;
+  const selectedMonth = allowedMonths.has(requestedMonth)
+    ? requestedMonth
+    : currentMonth;
+
   const [entries, banks, deposits, chq, billRows, heads, profiles] = await Promise.all([
-    db.select().from(cashbookEntries).orderBy(desc(cashbookEntries.entryDate), desc(cashbookEntries.id)),
+    db.select().from(cashbookEntries),
     db.select().from(bankAccounts),
     db.select().from(cashDeposits),
     db.select().from(cheques),
@@ -62,8 +96,38 @@ export default async function DashboardPage() {
   }
 
   const pendingCheques = chq.filter((c) => c.status === "pending");
-  const pendingBills = billRows.filter((b) => b.status === "pending" || b.status === "approved");
-  const recent = entries.slice(0, 8);
+  const pendingBills = billRows.filter(
+    (b) => b.status === "pending" || b.status === "approved",
+  );
+  const monthlyIncomeByCode = new Map<string, number>();
+  for (const entry of entries) {
+    const head = headMap.get(entry.ledgerHeadId);
+    if (
+      entry.entryType !== "receipt" ||
+      head?.type !== "income" ||
+      entry.entryDate.slice(0, 7) !== selectedMonth
+    ) {
+      continue;
+    }
+    monthlyIncomeByCode.set(
+      head.code,
+      (monthlyIncomeByCode.get(head.code) ?? 0) + num(entry.amount),
+    );
+  }
+  const mandiFeeThisMonth = monthlyIncomeByCode.get("1-A") ?? 0;
+  const vikasCessThisMonth = monthlyIncomeByCode.get("1-B") ?? 0;
+  const shamanFeeThisMonth = monthlyIncomeByCode.get("6-D") ?? 0;
+  const highlightedCodes = new Set(["1-A", "1-B", "6-D"]);
+  const otherIncomeThisMonth = [...monthlyIncomeByCode.entries()].reduce(
+    (sum, [code, amount]) =>
+      highlightedCodes.has(code) ? sum : sum + amount,
+    0,
+  );
+  const selectedMonthDate = new Date(`${selectedMonth}-01T00:00:00`);
+  const selectedMonthLabel = selectedMonthDate.toLocaleDateString("en-IN", {
+    month: "long",
+    year: "numeric",
+  });
 
   return (
     <div>
@@ -119,58 +183,79 @@ export default async function DashboardPage() {
         <StatCard label="Bills Awaiting Payment" value={String(pendingBills.length)} icon="📋" accent="amber" />
       </div>
 
-      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <Card title="Recent Cashbook Entries" className="lg:col-span-2">
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr>
-                  <Th>Date</Th>
-                  <Th>Voucher</Th>
-                  <Th>Head</Th>
-                  <Th>Type</Th>
-                  <Th right>Amount</Th>
-                </tr>
-              </thead>
-              <tbody>
-                {recent.length === 0 && (
-                  <EmptyRow colSpan={5} message="No entries yet. Add receipts & payments from the Cashbook." />
-                )}
-                {recent.map((e) => (
-                  <tr key={e.id}>
-                    <Td>{fmtDate(e.entryDate)}</Td>
-                    <Td>{e.voucherNo}</Td>
-                    <Td>{headMap.get(e.ledgerHeadId)?.name ?? "-"}</Td>
-                    <Td>
-                      <Badge color={e.entryType === "receipt" ? "green" : "red"}>
-                        {e.entryType === "receipt" ? "Receipt" : "Payment"}
-                      </Badge>
-                    </Td>
-                    <Td right className="font-semibold">{inr(e.amount)}</Td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      <section className="mt-6">
+        <div className="mb-3 flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-bold text-slate-900">
+              Month-wise Revenue / माहवार आय
+            </h2>
+            <p className="text-sm text-slate-500">
+              Selected month: {selectedMonthLabel}
+            </p>
           </div>
-        </Card>
-
-        <Card title="Bank Accounts">
-          <ul className="space-y-3">
-            {banks.length === 0 && (
-              <li className="text-sm text-slate-400">No bank accounts added yet.</li>
-            )}
-            {banks.map((b) => (
-              <li key={b.id} className="flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50 px-3 py-2.5">
-                <div>
-                  <p className="text-sm font-semibold text-slate-800">{b.bankName}</p>
-                  <p className="text-xs text-slate-500">A/c ····{b.accountNumber.slice(-4)} · {b.accountType}</p>
-                </div>
-                <Badge color={b.status === "active" ? "green" : "slate"}>{b.status}</Badge>
-              </li>
-            ))}
-          </ul>
-        </Card>
-      </div>
+          <form
+            method="get"
+            className="flex flex-wrap items-end gap-2 rounded-xl border border-slate-200 bg-white p-3 shadow-sm"
+          >
+            <div className="min-w-56">
+              <label className="mb-1 block text-xs font-semibold text-slate-600">
+                Month / माह चुनें
+              </label>
+              <select
+                name="month"
+                defaultValue={selectedMonth}
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
+              >
+                {monthGroups.map((group) => (
+                  <optgroup
+                    key={group.financialYear}
+                    label={`Financial Year ${group.financialYear}`}
+                  >
+                    {group.options.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                        {option.value === currentMonth ? " (Current)" : ""}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            </div>
+            <button className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700">
+              View Month
+            </button>
+          </form>
+        </div>
+        <p className="mb-3 text-xs text-slate-400">
+          Cashbook receipt entries से real-time calculation
+        </p>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <StatCard
+            label="मण्डी शुल्क / Mandi Fee"
+            value={inr(mandiFeeThisMonth)}
+            icon="🌾"
+            accent="emerald"
+          />
+          <StatCard
+            label="विकास सेस / Development Cess"
+            value={inr(vikasCessThisMonth)}
+            icon="🏗️"
+            accent="blue"
+          />
+          <StatCard
+            label="शमन शुल्क / Compounding Fee"
+            value={inr(shamanFeeThisMonth)}
+            icon="🧾"
+            accent="amber"
+          />
+          <StatCard
+            label="अन्य समस्त आय / Other Income"
+            value={inr(otherIncomeThisMonth)}
+            icon="📊"
+            accent="emerald"
+          />
+        </div>
+      </section>
     </div>
   );
 }

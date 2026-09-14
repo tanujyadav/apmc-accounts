@@ -14,20 +14,66 @@ Hindi labels alongside English throughout.
 
 | Module | Route | Purpose |
 |---|---|---|
-| Dashboard | `/` | Cash/bank balances, income & expense totals, recent entries at a glance |
-| Cashbook | `/cashbook` | Daily receipts & payments (cash, bank, cheque), voucher-numbered |
-| Ledger | `/ledger` | Running ledger by account head |
-| Bank Accounts | `/bank-accounts` | Bank account register with opening balances |
-| Cheque Register | `/cheques` | Issued/received cheques — pending, cleared, bounced, cancelled |
-| Cash Deposits | `/deposits` | Cash-to-bank deposit slips, allocated against cashbook receipts |
-| BRS | `/brs` | Monthly Bank Reconciliation Statement |
+| Dashboard | `/` | Cash/bank balances, pending cheques/bills, month-wise revenue by head (Mandi Fee, Development Cess, Compounding Fee, Other Income) |
+| Cashbook | `/cashbook` | Daily receipts & payments, voucher-numbered, with a date-range filter and an automatic "Balance Brought Forward" for any range |
+| Ledger | `/ledger` | Head-wise running ledger (Income/Expense/Other sections), date-range filter with carry-forward opening balance |
+| Party-wise Ledger | `/ledger/party` | Running ledger per party (trader/vendor/etc.), same date-range + carry-forward behavior |
+| Bank Accounts | `/bank-accounts` | Per-bank breakdown: opening balance, direct bank credits, cash-deposit credits, debits, net flow, current balance |
+| Cheque Register | `/cheques` | Received cheques register (pending/cleared/bounced/cancelled) with a date-range filter |
+| Cash Deposits | `/deposits` | Cash routed from either cashbook receipts or the FY opening balance into fixed bank accounts, with auto-generated slip numbers and a printable slip |
+| BRS | `/brs` | Combined monthly Bank Reconciliation Statement across all accounts together, with a printable statement and a 30s auto-refresh sync indicator |
 | Bill & Budget | `/bills-budget` | Budget allocation per ledger head per financial year; bills raised/approved/paid against it |
 | Shop Rent & Premium | `/shop-rent` | Shops/godowns/canteens allotted to occupants; monthly rent & premium collection |
 | Staff & Payments | `/staff-payments` | Employee master and salary/allowance/arrear/advance payments with TDS |
 | TDS Returns | `/tds-returns` | Quarterly 24Q/26Q/27Q filing register |
 | Revenue Progress | `/revenue-progress` | Income targets vs actuals per ledger head |
-| Reports | `/reports` | Income & expense reporting |
-| Settings | `/settings` | APMC profile, party directory, chart of accounts (ledger heads) |
+| Reports | `/reports` | Income & expense reporting, with printable Combined/Income-only/Expense-only views |
+| Settings | `/settings` | APMC profile, party directory, chart of accounts, **one-time Initial Opening Balance setup**, Security PIN, Data Backup & Reset |
+
+### Fixed bank-account routing
+
+Cash receipts and direct debits are auto-routed to one of three fixed SBI
+accounts based on the ledger head's **code** (not a user choice):
+
+| Ledger head code(s) | Routes to |
+|---|---|
+| `1-B`, `5-E`, `7` | SBI (APMC CESS) |
+| `EXP-36` | SBI (APMC CESS) |
+| `EXP-35` | SBI (APMC PAYMENT) |
+| everything else (e.g. `1-A` Mandi Fee) | SBI (APMC DEPOSIT) |
+
+Manual cheque entry is restricted to **received** cheques only — issued
+cheques are expected to come from the Bill & Budget / Staff Payment
+workflows. Direct cashbook debits are restricted to `EXP-35`/`EXP-36`; all
+other expense heads must go through Bill & Budget.
+
+### Security PIN
+
+Beyond the login above, most edit/delete actions (and Settings changes) ask
+for a separate 4–8 digit **Security PIN** — a lighter-weight confirmation
+step suited to a shared office terminal where everyone already logged in
+with the shared password. It defaults to `1234` on a fresh database.
+
+**Change it immediately after first login** (Settings → Security PIN) — the
+default is publicly documented here, and the app deliberately refuses to run
+**Reset Data** (below) while the PIN is still the default, as a safety net.
+
+### Data Backup & Reset (Settings)
+
+- **Backup**: downloads a JSON snapshot of every table, PIN-protected.
+- **Reset**: PIN-protected, requires typing `RESET` to confirm, and
+  permanently truncates all operational data (cashbook, banks, cheques,
+  bills, staff, etc.) — an intentionally destructive "start over" tool, not
+  something used in normal operation. Blocked while the PIN is still the
+  `1234` default.
+
+### One-time Initial Opening Balance
+
+The financial year's opening cash/bank balance is set **once**, in Settings,
+before day-to-day entry begins — after saving, it locks permanently (no edit
+path) until a full Data Reset. The Cashbook page no longer has an inline
+opening-balance editor; it only shows the locked value and computes
+"Balance Brought Forward" for any date range you filter to.
 
 ## Tech stack
 
@@ -51,11 +97,13 @@ src/
     index.ts           Postgres connection pool + Drizzle client
   lib/
     actions.ts         All server actions (create/update/delete for every module)
-    auth.ts            Session token signing/verification (HMAC via Web Crypto)
+    auth.ts            Login session token signing/verification (HMAC via Web Crypto)
+    security.ts        Security PIN hashing/verification (separate from login)
     format.ts, words.ts  Currency/date formatting, number-to-words for printed vouchers
   proxy.ts             Route guard — redirects unauthenticated requests to /login
 database/
   ledger-heads-template.sql   Starter chart of accounts (income/expense/asset/liability heads)
+  bank-accounts-template.sql  Starter bank accounts (the 3 fixed SBI accounts routing depends on)
 .github/workflows/
   backup.yml           Nightly automated database backup (see below)
 ```
@@ -101,13 +149,17 @@ locally).
    npm install
    npx drizzle-kit push
    ```
-3. Seed the chart of accounts — run `database/ledger-heads-template.sql`
-   against your database (e.g. via Neon's SQL Editor, or `psql -f`).
+3. Seed reference data — run both `database/ledger-heads-template.sql` and
+   `database/bank-accounts-template.sql` against your database (e.g. via
+   Neon's SQL Editor, or `psql -f`). The bank-routing logic depends on the
+   3 fixed accounts in the latter existing with those exact account numbers.
 4. Start the app:
    ```
    npm run dev
    ```
    Open http://localhost:3000 and log in with the credentials from `.env`.
+   Then go to Settings and change the Security PIN from its `1234` default
+   before doing anything else.
 
 ## Deployment
 

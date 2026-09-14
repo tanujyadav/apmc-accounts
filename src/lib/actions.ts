@@ -2,6 +2,7 @@
 
 import { db } from "@/db";
 import {
+  appSecuritySettings,
   ledgerHeads,
   bankAccounts,
   cashbookEntries,
@@ -21,9 +22,10 @@ import {
   tdsReturns,
   revenueTargets,
 } from "@/db/schema";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { hashSecurityPin, verifySecurityPin } from "@/lib/security";
 
 function s(fd: FormData, key: string): string {
   return String(fd.get(key) ?? "").trim();
@@ -36,8 +38,38 @@ function i(fd: FormData, key: string): number {
   return parseInt(String(fd.get(key) ?? "0"), 10);
 }
 
+async function requireSecurityPin(fd: FormData): Promise<void> {
+  const valid = await verifySecurityPin(s(fd, "securityPin"));
+  if (!valid) throw new Error("Invalid security PIN");
+}
+
+export async function changeSecurityPin(fd: FormData) {
+  const currentPin = s(fd, "currentPin");
+  const newPin = s(fd, "newPin");
+  const confirmPin = s(fd, "confirmPin");
+  if (!(await verifySecurityPin(currentPin))) {
+    redirect("/settings?pinChanged=invalid");
+  }
+  if (!/^\d{4,8}$/.test(newPin) || newPin !== confirmPin) {
+    redirect("/settings?pinChanged=mismatch");
+  }
+  const [settings] = await db.select().from(appSecuritySettings).limit(1);
+  const values = { pinHash: hashSecurityPin(newPin), updatedAt: new Date() };
+  if (settings) {
+    await db
+      .update(appSecuritySettings)
+      .set(values)
+      .where(eq(appSecuritySettings.id, settings.id));
+  } else {
+    await db.insert(appSecuritySettings).values(values);
+  }
+  revalidatePath("/settings");
+  redirect("/settings?pinChanged=success");
+}
+
 // ---------- APMC Profile ----------
 export async function saveApmcProfile(fd: FormData) {
+  await requireSecurityPin(fd);
   const mandiName = s(fd, "mandiName");
   if (!mandiName) return;
   const values = {
@@ -80,6 +112,7 @@ export async function addParty(fd: FormData) {
 }
 
 export async function togglePartyStatus(fd: FormData) {
+  await requireSecurityPin(fd);
   const id = i(fd, "id");
   const status = s(fd, "status") === "active" ? "inactive" : "active";
   await db.update(parties).set({ status }).where(eq(parties.id, id));
@@ -87,11 +120,13 @@ export async function togglePartyStatus(fd: FormData) {
 }
 
 export async function deleteParty(fd: FormData) {
+  await requireSecurityPin(fd);
   await db.delete(parties).where(eq(parties.id, i(fd, "id")));
   revalidatePath("/settings");
 }
 
 export async function deleteLedgerHead(fd: FormData) {
+  await requireSecurityPin(fd);
   const id = i(fd, "id");
   if (!id) redirect("/settings?headDelete=failed");
 
@@ -132,6 +167,7 @@ export async function addLedgerHead(fd: FormData) {
 }
 
 export async function updateLedgerHead(fd: FormData) {
+  await requireSecurityPin(fd);
   const id = i(fd, "id");
   const name = s(fd, "name");
   if (!id || !name) return;
@@ -165,6 +201,7 @@ export async function addBankAccount(fd: FormData) {
 }
 
 export async function toggleBankStatus(fd: FormData) {
+  await requireSecurityPin(fd);
   const id = i(fd, "id");
   const status = s(fd, "status") === "active" ? "closed" : "active";
   await db.update(bankAccounts).set({ status }).where(eq(bankAccounts.id, id));
@@ -172,6 +209,7 @@ export async function toggleBankStatus(fd: FormData) {
 }
 
 export async function updateBankOpeningBalance(fd: FormData) {
+  await requireSecurityPin(fd);
   const id = i(fd, "id");
   if (!id) return;
   await db
@@ -208,38 +246,46 @@ export async function addCashbookEntry(fd: FormData) {
 }
 
 export async function deleteCashbookEntry(fd: FormData) {
+  await requireSecurityPin(fd);
   await db.delete(cashbookEntries).where(eq(cashbookEntries.id, i(fd, "id")));
   revalidatePath("/", "layout");
 }
 
-export async function saveCashbookOpeningBalance(fd: FormData) {
+export async function setupInitialCashbookOpeningBalance(fd: FormData) {
+  await requireSecurityPin(fd);
   const financialYear = s(fd, "financialYear");
-  if (!financialYear) return;
+  const openingDate = s(fd, "openingDate");
+  if (!/^\d{4}-\d{2}$/.test(financialYear) || !openingDate) {
+    redirect("/settings?openingSetup=invalid");
+  }
 
-  const values = {
-    openingDate: s(fd, "openingDate") || null,
+  // This is intentionally a one-time application setup. Once any opening
+  // balance exists, it cannot be edited or inserted again. Operational Data
+  // Reset clears this record and makes initial setup available again.
+  const existing = await db
+    .select({ id: cashbookOpeningBalances.id })
+    .from(cashbookOpeningBalances)
+    .limit(1);
+  if (existing[0]) redirect("/settings?openingSetup=locked");
+
+  const startYear = Number(financialYear.slice(0, 4));
+  const periodStart = `${startYear}-04-01`;
+  const periodEnd = `${startYear + 1}-03-31`;
+  if (openingDate < periodStart || openingDate > periodEnd) {
+    redirect("/settings?openingSetup=invalid-date");
+  }
+
+  await db.insert(cashbookOpeningBalances).values({
+    financialYear,
+    openingDate,
     openingCash: n(fd, "openingCash"),
     openingBank: n(fd, "openingBank"),
     remarks: s(fd, "remarks") || null,
     updatedAt: new Date(),
-  };
-  const existing = await db
-    .select({ id: cashbookOpeningBalances.id })
-    .from(cashbookOpeningBalances)
-    .where(eq(cashbookOpeningBalances.financialYear, financialYear))
-    .limit(1);
+  });
 
-  if (existing[0]) {
-    await db
-      .update(cashbookOpeningBalances)
-      .set(values)
-      .where(eq(cashbookOpeningBalances.id, existing[0].id));
-  } else {
-    await db.insert(cashbookOpeningBalances).values({ financialYear, ...values });
-  }
-
-  revalidatePath("/cashbook");
-  redirect(`/cashbook?fy=${encodeURIComponent(financialYear)}&balanceSaved=1`);
+  revalidatePath("/", "layout");
+  redirect("/settings?openingSetup=success");
 }
 
 export async function addCashbookReceipt(fd: FormData) {
@@ -251,24 +297,52 @@ export async function addCashbookReceipt(fd: FormData) {
   const chequeNo = s(fd, "chequeNo") || null;
   const headIds = fd.getAll("ledgerHeadId").map((value) => Number(value));
   const destinations = fd.getAll("destination").map(String);
-  const bankIds = fd.getAll("bankAccountId").map((value) => Number(value));
   const amounts = fd.getAll("amount").map((value) => Number(value));
 
   if (!voucherNo || !partyName) return;
 
+  const [incomeHeadRows, bankRows] = await Promise.all([
+    db.select().from(ledgerHeads),
+    db.select().from(bankAccounts),
+  ]);
+  const incomeHeadMap = new Map(
+    incomeHeadRows.map((head) => [head.id, head]),
+  );
+  const bankByAccountNumber = new Map(
+    bankRows.map((bank) => [bank.accountNumber, bank]),
+  );
+
   const values = headIds.flatMap((ledgerHeadId, index) => {
     const amount = amounts[index] ?? 0;
     const destination = destinations[index] ?? "cash";
-    const bankAccountId = bankIds[index] || null;
     if (!ledgerHeadId || amount <= 0) return [];
-    const mode = destination === "cash" ? "cash" : sourceMode === "cheque" ? "cheque" : "bank";
+    const head = incomeHeadMap.get(ledgerHeadId);
+    if (!head || head.type !== "income") {
+      throw new Error("Invalid income head for receipt entry");
+    }
+    const routedAccountNumber =
+      head.code === "1-B"
+        ? "30410641195"
+        : head.code === "5-E" || head.code === "7"
+          ? "30386343784"
+          : "30386329769";
+    const routedBank = bankByAccountNumber.get(routedAccountNumber);
+    if (destination === "bank" && !routedBank) {
+      throw new Error(`Required bank account ${routedAccountNumber} is missing`);
+    }
+    const mode =
+      destination === "cash"
+        ? "cash"
+        : sourceMode === "cheque"
+          ? "cheque"
+          : "bank";
     return [{
       entryDate,
       voucherNo,
       entryType: "receipt",
       mode,
       ledgerHeadId,
-      bankAccountId: destination === "bank" ? bankAccountId : null,
+      bankAccountId: destination === "bank" ? routedBank!.id : null,
       chequeNo: mode === "cheque" ? chequeNo : null,
       partyName,
       particulars,
@@ -279,9 +353,15 @@ export async function addCashbookReceipt(fd: FormData) {
   if (values.length > 0) await db.insert(cashbookEntries).values(values);
   revalidatePath("/", "layout");
   const returnFinancialYear = s(fd, "returnFinancialYear");
+  const returnFrom = s(fd, "returnFrom");
+  const returnTo = s(fd, "returnTo");
+  const returnParams = new URLSearchParams();
+  if (returnFinancialYear) returnParams.set("fy", returnFinancialYear);
+  if (returnFrom) returnParams.set("from", returnFrom);
+  if (returnTo) returnParams.set("to", returnTo);
   redirect(
-    returnFinancialYear
-      ? `/cashbook?fy=${encodeURIComponent(returnFinancialYear)}`
+    returnParams.size > 0
+      ? `/cashbook?${returnParams.toString()}`
       : "/cashbook",
   );
 }
@@ -289,38 +369,61 @@ export async function addCashbookReceipt(fd: FormData) {
 export async function addCashbookPayment(fd: FormData) {
   const ledgerHeadId = i(fd, "ledgerHeadId");
   const amount = Number(n(fd, "amount"));
-  const mode = s(fd, "mode") || "bank";
-  const bankAccountId = i(fd, "bankAccountId") || null;
   const voucherNo = s(fd, "voucherNo");
   const partyName = s(fd, "partyName");
   if (!ledgerHeadId || amount <= 0 || !voucherNo || !partyName) return;
+
+  const [head] = await db
+    .select()
+    .from(ledgerHeads)
+    .where(eq(ledgerHeads.id, ledgerHeadId))
+    .limit(1);
+  if (!head || !new Set(["EXP-35", "EXP-36"]).has(head.code)) {
+    throw new Error("Only EXP-35 and EXP-36 are allowed as direct Cashbook debits");
+  }
+  const routedAccountNumber =
+    head.code === "EXP-36" ? "30410641195" : "30386329769";
+  const [routedBank] = await db
+    .select()
+    .from(bankAccounts)
+    .where(eq(bankAccounts.accountNumber, routedAccountNumber))
+    .limit(1);
+  if (!routedBank) {
+    throw new Error(`Required bank account ${routedAccountNumber} is missing`);
+  }
 
   await db.insert(cashbookEntries).values({
     entryDate: s(fd, "entryDate") || new Date().toISOString().slice(0, 10),
     voucherNo,
     entryType: "payment",
-    mode,
+    mode: "bank",
     ledgerHeadId,
-    bankAccountId: mode === "cash" ? null : bankAccountId,
-    chequeNo: mode === "cheque" ? s(fd, "chequeNo") || null : null,
+    bankAccountId: routedBank.id,
+    chequeNo: null,
     partyName,
-    particulars: s(fd, "particulars") || "Payment entry",
+    particulars: s(fd, "particulars") || "Mandi Parishad auto withdrawal",
     amount: amount.toFixed(2),
   });
   revalidatePath("/", "layout");
   const returnFinancialYear = s(fd, "returnFinancialYear");
+  const returnFrom = s(fd, "returnFrom");
+  const returnTo = s(fd, "returnTo");
+  const returnParams = new URLSearchParams();
+  if (returnFinancialYear) returnParams.set("fy", returnFinancialYear);
+  if (returnFrom) returnParams.set("from", returnFrom);
+  if (returnTo) returnParams.set("to", returnTo);
   redirect(
-    returnFinancialYear
-      ? `/cashbook?fy=${encodeURIComponent(returnFinancialYear)}`
+    returnParams.size > 0
+      ? `/cashbook?${returnParams.toString()}`
       : "/cashbook",
   );
 }
 
 // ---------- BRS ----------
 export async function saveBrsStatement(fd: FormData) {
-  const bankAccountId = i(fd, "bankAccountId");
+  await requireSecurityPin(fd);
   const statementMonth = s(fd, "statementMonth");
-  if (!bankAccountId || !statementMonth) return;
+  if (!statementMonth) return;
 
   const values = {
     bankInterest: n(fd, "bankInterest"),
@@ -329,6 +432,16 @@ export async function saveBrsStatement(fd: FormData) {
     bankCharges: n(fd, "bankCharges"),
     otherExpenses: n(fd, "otherExpenses"),
     passbookBalance: n(fd, "passbookBalance"),
+    cashbookBalanceSnapshot: n(fd, "cashbookBalanceSnapshot"),
+    unpresentedChequesSnapshot: n(fd, "unpresentedChequesSnapshot"),
+    unpresentedCountSnapshot: i(fd, "unpresentedCountSnapshot"),
+    unclearedDepositsSnapshot: n(fd, "unclearedDepositsSnapshot"),
+    unclearedCountSnapshot: i(fd, "unclearedCountSnapshot"),
+    totalAdditionsSnapshot: n(fd, "totalAdditionsSnapshot"),
+    balanceAfterAdditionsSnapshot: n(fd, "balanceAfterAdditionsSnapshot"),
+    totalDeductionsSnapshot: n(fd, "totalDeductionsSnapshot"),
+    calculatedBalanceSnapshot: n(fd, "calculatedBalanceSnapshot"),
+    differenceSnapshot: n(fd, "differenceSnapshot"),
     remarks: s(fd, "remarks") || null,
     updatedAt: new Date(),
   };
@@ -337,7 +450,7 @@ export async function saveBrsStatement(fd: FormData) {
     .from(brsStatements)
     .where(
       and(
-        eq(brsStatements.bankAccountId, bankAccountId),
+        isNull(brsStatements.bankAccountId),
         eq(brsStatements.statementMonth, statementMonth),
       ),
     )
@@ -350,18 +463,17 @@ export async function saveBrsStatement(fd: FormData) {
       .where(eq(brsStatements.id, existing[0].id));
   } else {
     await db.insert(brsStatements).values({
-      bankAccountId,
+      bankAccountId: null,
       statementMonth,
       ...values,
     });
   }
   revalidatePath("/brs");
-  redirect(
-    `/brs?bank=${bankAccountId}&month=${encodeURIComponent(statementMonth)}&saved=1`,
-  );
+  redirect(`/brs?month=${encodeURIComponent(statementMonth)}&saved=1`);
 }
 
 export async function reconcileEntry(fd: FormData) {
+  await requireSecurityPin(fd);
   const id = i(fd, "id");
   await db
     .update(cashbookEntries)
@@ -374,6 +486,7 @@ export async function reconcileEntry(fd: FormData) {
 }
 
 export async function unreconcileEntry(fd: FormData) {
+  await requireSecurityPin(fd);
   await db
     .update(cashbookEntries)
     .set({ reconciled: false, reconciledDate: null })
@@ -391,90 +504,222 @@ export async function addCheque(fd: FormData) {
     bankAccountId: i(fd, "bankAccountId"),
     partyName: s(fd, "partyName"),
     amount: n(fd, "amount"),
-    direction: s(fd, "direction") || "issued",
+    // Manual register entry is restricted to received cheques. Issued/payment
+    // cheques will be generated by Bill & Budget or Staff Payment workflows.
+    direction: "received",
     remarks: s(fd, "remarks") || null,
   });
   revalidatePath("/cheques");
 }
 
 export async function updateChequeStatus(fd: FormData) {
+  await requireSecurityPin(fd);
+  const status = s(fd, "status");
   await db
     .update(cheques)
-    .set({ status: s(fd, "status") })
+    .set({
+      status,
+      clearedDate:
+        status === "cleared"
+          ? s(fd, "clearedDate") || new Date().toISOString().slice(0, 10)
+          : null,
+    })
     .where(eq(cheques.id, i(fd, "id")));
   revalidatePath("/cheques");
+  revalidatePath("/brs");
 }
 
 // ---------- Cash Deposits ----------
 export async function addCashDeposit(fd: FormData) {
-  const bankAccountId = i(fd, "bankAccountId");
-  const depositDate = s(fd, "depositDate") || new Date().toISOString().slice(0, 10);
-  const slipNo = s(fd, "slipNo");
+  const depositDate =
+    s(fd, "depositDate") || new Date().toISOString().slice(0, 10);
   const depositedBy = s(fd, "depositedBy");
-  const receiptIds = fd.getAll("cashbookEntryId").map((value) => Number(value));
-  const requestedAmounts = fd.getAll("allocatedAmount").map((value) => Number(value));
-  if (!bankAccountId || !slipNo || !depositedBy) return;
+  const sourceKeys = fd.getAll("sourceKey").map(String);
+  const destinationBankIds = fd
+    .getAll("destinationBankAccountId")
+    .map((value) => Number(value));
+  const requestedAmounts = fd
+    .getAll("allocatedAmount")
+    .map((value) => Number(value));
+  if (!depositedBy) return;
 
   let saved = false;
   try {
     await db.transaction(async (tx) => {
-      const cashReceipts = await tx
-        .select()
-        .from(cashbookEntries)
-        .where(
-          and(
-            eq(cashbookEntries.entryType, "receipt"),
-            eq(cashbookEntries.mode, "cash"),
+      const [
+        cashReceipts,
+        openingBalances,
+        previousAllocations,
+        headRows,
+        bankRows,
+      ] = await Promise.all([
+        tx
+          .select()
+          .from(cashbookEntries)
+          .where(
+            and(
+              eq(cashbookEntries.entryType, "receipt"),
+              eq(cashbookEntries.mode, "cash"),
+            ),
           ),
-        );
-      const previousAllocations = await tx.select().from(cashDepositAllocations);
-      const receiptMap = new Map(cashReceipts.map((receipt) => [receipt.id, receipt]));
-      const allocatedMap = new Map<number, number>();
+        tx.select().from(cashbookOpeningBalances),
+        tx.select().from(cashDepositAllocations),
+        tx.select().from(ledgerHeads),
+        tx.select().from(bankAccounts),
+      ]);
+
+      const receiptMap = new Map(
+        cashReceipts.map((receipt) => [receipt.id, receipt]),
+      );
+      const openingMap = new Map(
+        openingBalances.map((opening) => [opening.id, opening]),
+      );
+      const headMap = new Map(headRows.map((head) => [head.id, head]));
+      const bankByAccountNumber = new Map(
+        bankRows.map((bank) => [bank.accountNumber, bank]),
+      );
+      const allocatedByReceipt = new Map<number, number>();
+      const allocatedByOpening = new Map<number, number>();
       for (const allocation of previousAllocations) {
-        allocatedMap.set(
-          allocation.cashbookEntryId,
-          (allocatedMap.get(allocation.cashbookEntryId) ?? 0) + Number(allocation.allocatedAmount),
-        );
+        if (allocation.cashbookEntryId !== null) {
+          allocatedByReceipt.set(
+            allocation.cashbookEntryId,
+            (allocatedByReceipt.get(allocation.cashbookEntryId) ?? 0) +
+              Number(allocation.allocatedAmount),
+          );
+        }
+        if (allocation.cashbookOpeningBalanceId !== null) {
+          allocatedByOpening.set(
+            allocation.cashbookOpeningBalanceId,
+            (allocatedByOpening.get(allocation.cashbookOpeningBalanceId) ?? 0) +
+              Number(allocation.allocatedAmount),
+          );
+        }
       }
 
-      const allocations = receiptIds.flatMap((cashbookEntryId, index) => {
+      const allocations: Array<{
+        bankAccountId: number;
+        cashbookEntryId: number | null;
+        cashbookOpeningBalanceId: number | null;
+        allocatedAmount: string;
+      }> = [];
+
+      sourceKeys.forEach((sourceKey, index) => {
         const requested = requestedAmounts[index] ?? 0;
-        const receipt = receiptMap.get(cashbookEntryId);
-        if (!receipt || requested <= 0) return [];
-        if (depositDate < receipt.entryDate) {
-          throw new Error("Deposit date cannot be before the receipt date");
+        if (requested <= 0) return;
+        const [sourceType, rawId] = sourceKey.split(":");
+        const sourceId = Number(rawId);
+
+        if (sourceType === "receipt") {
+          const receipt = receiptMap.get(sourceId);
+          if (!receipt) throw new Error("Cash receipt was not found");
+          if (depositDate < receipt.entryDate) {
+            throw new Error("Deposit date cannot be before receipt date");
+          }
+          const available =
+            Number(receipt.amount) - (allocatedByReceipt.get(sourceId) ?? 0);
+          if (requested > available + 0.005) {
+            throw new Error("Deposit exceeds pending receipt balance");
+          }
+          const head = headMap.get(receipt.ledgerHeadId);
+          if (!head || head.type !== "income") {
+            throw new Error("Receipt income head was not found");
+          }
+          const routedAccountNumber =
+            head.code === "1-B"
+              ? "30410641195"
+              : head.code === "5-E"
+                ? "30386343784"
+                : "30386329769";
+          const routedBank = bankByAccountNumber.get(routedAccountNumber);
+          if (!routedBank) {
+            throw new Error(`Required bank account ${routedAccountNumber} is missing`);
+          }
+          allocations.push({
+            bankAccountId: routedBank.id,
+            cashbookEntryId: sourceId,
+            cashbookOpeningBalanceId: null,
+            allocatedAmount: requested.toFixed(2),
+          });
+          return;
         }
-        const available = Number(receipt.amount) - (allocatedMap.get(cashbookEntryId) ?? 0);
-        if (requested > available + 0.005) {
-          throw new Error("Deposit allocation exceeds pending receipt balance");
+
+        if (sourceType === "opening") {
+          const opening = openingMap.get(sourceId);
+          if (!opening) throw new Error("Opening cash balance was not found");
+          const startYear = Number(opening.financialYear.slice(0, 4));
+          const sourceDate =
+            opening.openingDate || `${startYear || new Date().getFullYear()}-04-01`;
+          if (depositDate < sourceDate) {
+            throw new Error("Deposit date cannot be before opening date");
+          }
+          const available =
+            Number(opening.openingCash) -
+            (allocatedByOpening.get(sourceId) ?? 0);
+          if (requested > available + 0.005) {
+            throw new Error("Deposit exceeds pending opening cash balance");
+          }
+          const selectedBankId = destinationBankIds[index];
+          const routedBank = bankRows.find(
+            (bank) => bank.id === selectedBankId && bank.status === "active",
+          );
+          if (!routedBank) {
+            throw new Error(
+              "Select an active bank account for Opening Cash Balance",
+            );
+          }
+          allocations.push({
+            bankAccountId: routedBank.id,
+            cashbookEntryId: null,
+            cashbookOpeningBalanceId: sourceId,
+            allocatedAmount: requested.toFixed(2),
+          });
+          return;
         }
-        return [{ cashbookEntryId, allocatedAmount: requested.toFixed(2) }];
+
+        throw new Error("Invalid cash deposit source");
       });
-      const total = allocations.reduce(
-        (sum, allocation) => sum + Number(allocation.allocatedAmount),
-        0,
-      );
-      if (total <= 0) throw new Error("No cash receipt amount selected");
 
-      const [deposit] = await tx
-        .insert(cashDeposits)
-        .values({
-          depositDate,
-          bankAccountId,
-          slipNo,
-          amount: total.toFixed(2),
-          depositedBy,
-          remarks: s(fd, "remarks") || null,
-        })
-        .returning({ id: cashDeposits.id });
+      if (allocations.length === 0) throw new Error("No cash amount selected");
+      const grouped = new Map<number, typeof allocations>();
+      for (const allocation of allocations) {
+        const list = grouped.get(allocation.bankAccountId) ?? [];
+        list.push(allocation);
+        grouped.set(allocation.bankAccountId, list);
+      }
 
-      await tx.insert(cashDepositAllocations).values(
-        allocations.map((allocation) => ({
-          cashDepositId: deposit.id,
-          cashbookEntryId: allocation.cashbookEntryId,
-          allocatedAmount: allocation.allocatedAmount,
-        })),
-      );
+      for (const [bankAccountId, bankAllocations] of grouped) {
+        const total = bankAllocations.reduce(
+          (sum, allocation) => sum + Number(allocation.allocatedAmount),
+          0,
+        );
+        const [deposit] = await tx
+          .insert(cashDeposits)
+          .values({
+            depositDate,
+            bankAccountId,
+            slipNo: "AUTO-PENDING",
+            amount: total.toFixed(2),
+            depositedBy,
+            remarks: s(fd, "remarks") || null,
+          })
+          .returning({ id: cashDeposits.id });
+        const autoSlipNo = `CDS-${depositDate.slice(0, 4)}-${String(
+          deposit.id,
+        ).padStart(6, "0")}`;
+        await tx
+          .update(cashDeposits)
+          .set({ slipNo: autoSlipNo })
+          .where(eq(cashDeposits.id, deposit.id));
+        await tx.insert(cashDepositAllocations).values(
+          bankAllocations.map((allocation) => ({
+            cashDepositId: deposit.id,
+            cashbookEntryId: allocation.cashbookEntryId,
+            cashbookOpeningBalanceId: allocation.cashbookOpeningBalanceId,
+            allocatedAmount: allocation.allocatedAmount,
+          })),
+        );
+      }
       saved = true;
     });
   } catch {
@@ -486,9 +731,28 @@ export async function addCashDeposit(fd: FormData) {
 }
 
 export async function deleteCashDeposit(fd: FormData) {
-  await db.delete(cashDeposits).where(eq(cashDeposits.id, i(fd, "id")));
+  await requireSecurityPin(fd);
+  const id = i(fd, "id");
+  if (!id) redirect("/deposits?deposit=delete-failed");
+
+  let deleted = false;
+  try {
+    await db.transaction(async (tx) => {
+      await tx
+        .delete(cashDepositAllocations)
+        .where(eq(cashDepositAllocations.cashDepositId, id));
+      const result = await tx
+        .delete(cashDeposits)
+        .where(eq(cashDeposits.id, id))
+        .returning({ id: cashDeposits.id });
+      deleted = result.length > 0;
+    });
+  } catch {
+    deleted = false;
+  }
+
   revalidatePath("/", "layout");
-  redirect("/deposits?deposit=deleted");
+  redirect(`/deposits?deposit=${deleted ? "deleted" : "delete-failed"}`);
 }
 
 // ---------- Budgets ----------
@@ -521,6 +785,7 @@ export async function addBill(fd: FormData) {
 }
 
 export async function updateBillStatus(fd: FormData) {
+  await requireSecurityPin(fd);
   const status = s(fd, "status");
   await db
     .update(bills)
@@ -553,6 +818,7 @@ export async function addShop(fd: FormData) {
 }
 
 export async function updateShopStatus(fd: FormData) {
+  await requireSecurityPin(fd);
   await db
     .update(shops)
     .set({ status: s(fd, "status") || "active" })
@@ -586,6 +852,7 @@ export async function addShopCollection(fd: FormData) {
 }
 
 export async function updateShopCollection(fd: FormData) {
+  await requireSecurityPin(fd);
   const rent = Number(n(fd, "rentAmount"));
   const premium = Number(n(fd, "premiumAmount"));
   const penalty = Number(n(fd, "penaltyAmount"));
@@ -606,11 +873,13 @@ export async function updateShopCollection(fd: FormData) {
 }
 
 export async function deleteShopCollection(fd: FormData) {
+  await requireSecurityPin(fd);
   await db.delete(shopCollections).where(eq(shopCollections.id, i(fd, "id")));
   revalidatePath("/shop-rent");
 }
 
 export async function deleteShop(fd: FormData) {
+  await requireSecurityPin(fd);
   const id = i(fd, "id");
   await db.transaction(async (tx) => {
     await tx.delete(shopCollections).where(eq(shopCollections.shopId, id));
@@ -638,6 +907,7 @@ export async function addStaffMember(fd: FormData) {
 }
 
 export async function updateStaffStatus(fd: FormData) {
+  await requireSecurityPin(fd);
   await db
     .update(staffMembers)
     .set({ status: s(fd, "status") || "active" })
@@ -672,6 +942,7 @@ export async function addStaffPayment(fd: FormData) {
 }
 
 export async function updateStaffPaymentStatus(fd: FormData) {
+  await requireSecurityPin(fd);
   const status = s(fd, "status") || "pending";
   await db
     .update(staffPayments)
@@ -684,11 +955,13 @@ export async function updateStaffPaymentStatus(fd: FormData) {
 }
 
 export async function deleteStaffPayment(fd: FormData) {
+  await requireSecurityPin(fd);
   await db.delete(staffPayments).where(eq(staffPayments.id, i(fd, "id")));
   revalidatePath("/staff-payments");
 }
 
 export async function deleteStaffMember(fd: FormData) {
+  await requireSecurityPin(fd);
   const id = i(fd, "id");
   await db.transaction(async (tx) => {
     await tx.delete(staffPayments).where(eq(staffPayments.staffId, id));
@@ -722,6 +995,7 @@ export async function addTdsReturn(fd: FormData) {
 }
 
 export async function updateTdsReturn(fd: FormData) {
+  await requireSecurityPin(fd);
   await db
     .update(tdsReturns)
     .set({
@@ -734,12 +1008,14 @@ export async function updateTdsReturn(fd: FormData) {
 }
 
 export async function deleteTdsReturn(fd: FormData) {
+  await requireSecurityPin(fd);
   await db.delete(tdsReturns).where(eq(tdsReturns.id, i(fd, "id")));
   revalidatePath("/tds-returns");
 }
 
 // ---------- Revenue Progress ----------
 export async function saveRevenueTarget(fd: FormData) {
+  await requireSecurityPin(fd);
   const financialYear = s(fd, "financialYear");
   const ledgerHeadId = i(fd, "ledgerHeadId");
   if (!financialYear || !ledgerHeadId) return;
@@ -771,6 +1047,7 @@ export async function saveRevenueTarget(fd: FormData) {
 }
 
 export async function deleteRevenueTarget(fd: FormData) {
+  await requireSecurityPin(fd);
   await db.delete(revenueTargets).where(eq(revenueTargets.id, i(fd, "id")));
   revalidatePath("/revenue-progress");
 }

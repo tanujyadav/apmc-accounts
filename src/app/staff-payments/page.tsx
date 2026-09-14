@@ -1,3 +1,4 @@
+import PinProtectedForm from "@/components/PinProtectedForm";
 import { db } from "@/db";
 import { staffMembers, staffPayments } from "@/db/schema";
 import { asc, desc } from "drizzle-orm";
@@ -219,20 +220,20 @@ export default async function StaffPaymentsPage() {
                       <Td>
                         <Badge color={payment.status === "paid" ? "green" : "amber"}>{payment.status}</Badge>
                         {payment.status !== "paid" && (
-                          <form action={updateStaffPaymentStatus} className="mt-2 flex min-w-52 gap-1">
+                          <PinProtectedForm action={updateStaffPaymentStatus} className="mt-2 flex min-w-52 gap-1">
                             <input type="hidden" name="id" value={payment.id} />
                             <input type="hidden" name="status" value="paid" />
                             <input type="date" name="paymentDate" defaultValue={todayISO()} className="min-w-0 rounded border border-slate-300 px-1 py-1 text-xs" />
                             <button className="rounded bg-emerald-600 px-2 py-1 text-xs font-semibold text-white">Mark Paid</button>
-                          </form>
+                          </PinProtectedForm>
                         )}
                         {payment.paymentDate && <p className="mt-1 text-[11px] text-slate-500">{fmtDate(payment.paymentDate)}</p>}
                       </Td>
                       <Td>
-                        <form action={deleteStaffPayment}>
+                        <PinProtectedForm action={deleteStaffPayment}>
                           <input type="hidden" name="id" value={payment.id} />
                           <button className="text-xs font-semibold text-red-600">Delete</button>
-                        </form>
+                        </PinProtectedForm>
                       </Td>
                     </tr>
                   );
@@ -268,20 +269,20 @@ export default async function StaffPaymentsPage() {
                     <Td>{member.pan || "-"}<br /><span className="text-xs text-slate-500">A/c {member.bankAccount ? `····${member.bankAccount.slice(-4)}` : "-"}</span></Td>
                     <Td right>{inr(member.basicPay)}</Td>
                     <Td>
-                      <form action={updateStaffStatus} className="flex gap-1">
+                      <PinProtectedForm action={updateStaffStatus} className="flex gap-1">
                         <input type="hidden" name="id" value={member.id} />
                         <select name="status" defaultValue={member.status} className="rounded border border-slate-300 px-2 py-1 text-xs">
                           <option value="active">active</option>
                           <option value="inactive">inactive</option>
                         </select>
                         <button className="rounded bg-slate-800 px-2 py-1 text-xs text-white">Set</button>
-                      </form>
+                      </PinProtectedForm>
                     </Td>
                     <Td>
-                      <form action={deleteStaffMember}>
+                      <PinProtectedForm action={deleteStaffMember}>
                         <input type="hidden" name="id" value={member.id} />
                         <button className="text-xs font-semibold text-red-600">Delete</button>
-                      </form>
+                      </PinProtectedForm>
                     </Td>
                   </tr>
                 ))}

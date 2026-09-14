@@ -1,5 +1,6 @@
 "use client";
 
+import PinProtectedForm from "@/components/PinProtectedForm";
 import { useMemo, useState } from "react";
 import { saveBrsStatement } from "@/lib/actions";
 import { inr } from "@/lib/format";
@@ -48,7 +49,6 @@ function ManualAmount({
 }
 
 export default function BrsStatementForm({
-  bankAccountId,
   statementMonth,
   monthLabel,
   cashbookBalance,
@@ -58,7 +58,6 @@ export default function BrsStatementForm({
   unclearedCount,
   initialValues,
 }: {
-  bankAccountId: number;
   statementMonth: string;
   monthLabel: string;
   cashbookBalance: number;
@@ -108,9 +107,18 @@ export default function BrsStatementForm({
     "w-72 whitespace-nowrap border-b border-slate-300 px-5 py-4 text-right font-mono text-base font-bold tabular-nums text-slate-900";
 
   return (
-    <form action={saveBrsStatement}>
-      <input type="hidden" name="bankAccountId" value={bankAccountId} />
+    <PinProtectedForm action={saveBrsStatement}>
       <input type="hidden" name="statementMonth" value={statementMonth} />
+      <input type="hidden" name="cashbookBalanceSnapshot" value={cashbookBalance} />
+      <input type="hidden" name="unpresentedChequesSnapshot" value={unpresentedCheques} />
+      <input type="hidden" name="unpresentedCountSnapshot" value={unpresentedCount} />
+      <input type="hidden" name="unclearedDepositsSnapshot" value={unclearedDeposits} />
+      <input type="hidden" name="unclearedCountSnapshot" value={unclearedCount} />
+      <input type="hidden" name="totalAdditionsSnapshot" value={totals.totalAdditions} />
+      <input type="hidden" name="balanceAfterAdditionsSnapshot" value={totals.balanceAfterAdditions} />
+      <input type="hidden" name="totalDeductionsSnapshot" value={totals.totalDeductions} />
+      <input type="hidden" name="calculatedBalanceSnapshot" value={totals.calculatedBalance} />
+      <input type="hidden" name="differenceSnapshot" value={totals.difference} />
 
       <div className="overflow-x-auto rounded-xl border-2 border-slate-700">
         <table className="w-full min-w-[1150px] border-collapse bg-white">
@@ -130,7 +138,7 @@ export default function BrsStatementForm({
               <td className={description + " font-semibold"}>
                 रोकड़ बही के अनुसार बैंक में जमा अवशेष
                 <span className="ml-3 text-sm font-normal text-slate-500">
-                  (Balance as per Cashbook)
+                  (Cashbook Closing Balance — Bank Column, Auto Sync)
                 </span>
               </td>
               <td className={amount}>{inr(cashbookBalance)}</td>
@@ -147,7 +155,12 @@ export default function BrsStatementForm({
               <td className={rowNumber}></td>
               <td className={description}>
                 <div className="flex items-center justify-between gap-4">
-                  <span>(अ)&nbsp; चालू माह में निर्गत चेक किन्तु मासान्त तक बैंक द्वारा भुगतान नहीं</span>
+                  <span>
+                    (अ)&nbsp; चालू माह में निर्गत चेक किन्तु मासान्त तक बैंक द्वारा भुगतान नहीं
+                    <span className="ml-2 text-xs font-semibold text-blue-700">
+                      (Cheque Register से Auto Sync)
+                    </span>
+                  </span>
                   <span className="whitespace-nowrap rounded-lg border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
                     {unpresentedCount} चेक अनिस्तारित
                   </span>
@@ -302,6 +315,6 @@ export default function BrsStatementForm({
           Save BRS Statement
         </button>
       </div>
-    </form>
+    </PinProtectedForm>
   );
 }

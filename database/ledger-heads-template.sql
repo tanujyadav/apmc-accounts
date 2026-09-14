@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict BFqObAAMWctVfVGtFcEQp4FnNQNxaGMDGCzyfhdxBr9pHYpsiokeeFmBntjbhTq
+\restrict gECM7PPKqY7Hwz5wnik1resNTLdtCkebZCBssiGXC92AVdwdlYLYhIuSd8CrNBS
 
 -- Dumped from database version 15.16 (Debian 15.16-0+deb12u1)
 -- Dumped by pg_dump version 15.16 (Debian 15.16-0+deb12u1)
@@ -85,18 +85,21 @@ INSERT INTO public.ledger_heads (id, code, name, type, created_at, name_hindi) V
 INSERT INTO public.ledger_heads (id, code, name, type, created_at, name_hindi) VALUES (70, 'EXP-32', 'Travel Allowance', 'expense', '2026-09-08 08:49:42.726946', 'यात्रा भत्ता');
 INSERT INTO public.ledger_heads (id, code, name, type, created_at, name_hindi) VALUES (71, 'EXP-33', 'CCTV Repair and Maintenance Expenses (Mandi Site)', 'expense', '2026-09-08 08:49:42.726946', 'CCTV मरम्मत व अनुरक्षण व्यय (मंडी स्थल)');
 INSERT INTO public.ledger_heads (id, code, name, type, created_at, name_hindi) VALUES (72, 'EXP-34', 'Minor / Miscellaneous Repairs', 'expense', '2026-09-08 08:49:42.726946', 'छुट पुट मरम्मत');
+INSERT INTO public.ledger_heads (id, code, name, type, created_at, name_hindi) VALUES (73, 'EXP-35', 'Funds automatically withdrawn from committee accounts by the Mandi Board (Market Fee)', 'expense', '2026-09-13 17:21:46.994809', 'मण्डी परिषद् द्वारा समिति खातों से स्वतः निकाली धनराशि (मंडी शुल्क)');
+INSERT INTO public.ledger_heads (id, code, name, type, created_at, name_hindi) VALUES (74, 'EXP-36', 'Funds automatically withdrawn from committee accounts by the Mandi Board (CESS)', 'expense', '2026-09-13 17:21:46.994809', 'मण्डी परिषद् द्वारा समिति खातों से स्वतः निकाली धनराशि (विकास सेस)');
+INSERT INTO public.ledger_heads (id, code, name, type, created_at, name_hindi) VALUES (75, '7', 'Fund Auto Credit from Mandi Board in Mandi Bank A/C (Grant)', 'income', '2026-09-13 17:21:46.994809', 'मण्डी परिषद् से समिति खाते में प्राप्त राशि (अनुदान)');
 
 
 --
 -- Name: ledger_heads_id_seq; Type: SEQUENCE SET; Schema: public; Owner: -
 --
 
-SELECT pg_catalog.setval('public.ledger_heads_id_seq', 72, true);
+SELECT pg_catalog.setval('public.ledger_heads_id_seq', 75, true);
 
 
 --
 -- PostgreSQL database dump complete
 --
 
-\unrestrict BFqObAAMWctVfVGtFcEQp4FnNQNxaGMDGCzyfhdxBr9pHYpsiokeeFmBntjbhTq
+\unrestrict gECM7PPKqY7Hwz5wnik1resNTLdtCkebZCBssiGXC92AVdwdlYLYhIuSd8CrNBS
 

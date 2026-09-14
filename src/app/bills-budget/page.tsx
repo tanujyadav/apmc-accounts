@@ -1,3 +1,4 @@
+import PinProtectedForm from "@/components/PinProtectedForm";
 import { db } from "@/db";
 import { bills, budgets, ledgerHeads, parties } from "@/db/schema";
 import { desc, asc } from "drizzle-orm";
@@ -213,7 +214,7 @@ export default async function BillsBudgetPage() {
                     <Td right className="font-semibold">{inr(b.amount)}</Td>
                     <Td><Badge color={billColor(b.status)}>{b.status}</Badge></Td>
                     <Td>
-                      <form action={updateBillStatus} className="flex items-center gap-1">
+                      <PinProtectedForm action={updateBillStatus} className="flex items-center gap-1">
                         <input type="hidden" name="id" value={b.id} />
                         <select name="status" defaultValue={b.status} className="rounded border border-slate-300 px-1.5 py-1 text-xs">
                           <option value="pending">pending</option>
@@ -224,7 +225,7 @@ export default async function BillsBudgetPage() {
                         <button className="rounded bg-slate-800 px-2 py-1 text-xs font-semibold text-white hover:bg-slate-700">
                           Set
                         </button>
-                      </form>
+                      </PinProtectedForm>
                     </Td>
                     <Td>
                       <a

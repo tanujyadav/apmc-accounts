@@ -22,7 +22,7 @@ const nav = [
   { href: "/settings", label: "Profile & Settings", icon: "⚙️" },
 ];
 
-export default function Sidebar() {
+export default function Sidebar({ apmcName }: { apmcName: string }) {
   const pathname = usePathname();
   return (
     <aside className="fixed inset-y-0 left-0 z-40 flex w-64 flex-col bg-emerald-950 text-emerald-50">
@@ -38,9 +38,10 @@ export default function Sidebar() {
               className="h-full w-full object-contain"
             />
           </div>
-          <div>
-            <h1 className="text-base font-bold leading-tight">APMC Uttar Pradesh</h1>
-            <p className="text-xs text-emerald-300">Mandi Samiti Accounts</p>
+          <div className="min-w-0">
+            <h1 className="break-words text-sm font-bold leading-snug text-white">
+              {apmcName}
+            </h1>
           </div>
         </div>
       </div>
@@ -76,8 +77,6 @@ export default function Sidebar() {
         </button>
       </form>
       <div className="border-t border-emerald-900 px-5 py-4 text-[11px] text-emerald-400">
-        राज्य कृषि उत्पादन मण्डी परिषद्, उ.प्र.
-        <br />
         Accounting & Finance Module
       </div>
     </aside>

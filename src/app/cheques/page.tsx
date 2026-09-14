@@ -1,3 +1,4 @@
+import PinProtectedForm from "@/components/PinProtectedForm";
 import { db } from "@/db";
 import { cheques, bankAccounts, parties } from "@/db/schema";
 import { desc, asc } from "drizzle-orm";
@@ -12,13 +13,29 @@ export const dynamic = "force-dynamic";
 const statusColor = (s: string) =>
   s === "cleared" ? "green" : s === "bounced" ? "red" : s === "cancelled" ? "slate" : "amber";
 
-export default async function ChequesPage() {
-  const [rows, banks, partyRows] = await Promise.all([
+export default async function ChequesPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ from?: string; to?: string }>;
+}) {
+  const { from, to } = await searchParams;
+  const [allRows, banks, partyRows] = await Promise.all([
     db.select().from(cheques).orderBy(desc(cheques.chequeDate), desc(cheques.id)),
     db.select().from(bankAccounts).orderBy(asc(bankAccounts.bankName)),
     db.select().from(parties).orderBy(asc(parties.name)),
   ]);
   const bankMap = new Map(banks.map((b) => [b.id, b.bankName]));
+  const validFrom = /^\d{4}-\d{2}-\d{2}$/.test(from ?? "") ? from! : null;
+  const validTo = /^\d{4}-\d{2}-\d{2}$/.test(to ?? "") ? to! : null;
+  const hasDateFilter = Boolean(validFrom || validTo);
+  const invalidDateRange = Boolean(validFrom && validTo && validFrom > validTo);
+  const rows = invalidDateRange
+    ? allRows
+    : allRows.filter(
+        (cheque) =>
+          (!validFrom || cheque.chequeDate >= validFrom) &&
+          (!validTo || cheque.chequeDate <= validTo),
+      );
 
   const issued = rows.filter((c) => c.direction === "issued");
   const received = rows.filter((c) => c.direction === "received");
@@ -31,8 +48,54 @@ export default async function ChequesPage() {
       <PageHeader
         title="Cheque Register"
         hindi="चेक पंजिका"
-        subtitle="Register of cheques issued and received with clearing status"
+        subtitle="Manual entry only for received cheques; issued cheques will sync from payment modules"
       />
+
+      <form
+        method="get"
+        className="mb-6 flex flex-wrap items-end gap-3 rounded-xl border border-blue-200 bg-blue-50/50 p-4 shadow-sm"
+      >
+        <div>
+          <label className={labelCls}>From Date / दिनांक से</label>
+          <input
+            type="date"
+            name="from"
+            defaultValue={validFrom ?? ""}
+            className={inputCls}
+          />
+        </div>
+        <div>
+          <label className={labelCls}>To Date / दिनांक तक</label>
+          <input
+            type="date"
+            name="to"
+            defaultValue={validTo ?? ""}
+            className={inputCls}
+          />
+        </div>
+        <button className={btnCls}>Apply Date Filter</button>
+        {hasDateFilter && (
+          <a
+            href="/cheques"
+            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+          >
+            Clear Filter
+          </a>
+        )}
+        <span className="pb-2 text-xs text-slate-500">
+          {hasDateFilter && !invalidDateRange
+            ? `${validFrom ? fmtDate(validFrom) : "Beginning"} to ${
+                validTo ? fmtDate(validTo) : "Today"
+              }`
+            : "All dates"}
+        </span>
+      </form>
+
+      {invalidDateRange && (
+        <div className="mb-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-800">
+          From Date, To Date से बाद की नहीं हो सकती। अभी all dates दिख रही हैं।
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <StatCard label="Cheques Issued" value={String(issued.length)} icon="✍️" accent="blue" />
@@ -41,7 +104,7 @@ export default async function ChequesPage() {
       </div>
 
       <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-3">
-        <Card title="Record Cheque">
+        <Card title="Record Received Cheque / प्राप्त चेक दर्ज करें">
           <form action={addCheque} className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -65,7 +128,7 @@ export default async function ChequesPage() {
               </select>
             </div>
             <div>
-              <label className={labelCls}>Party Name (Payee / Drawer)</label>
+              <label className={labelCls}>Drawer / Party Name</label>
               <input
                 name="partyName"
                 list="party-list"
@@ -84,28 +147,28 @@ export default async function ChequesPage() {
                 Suggestions come from the Party Directory (Settings).
               </p>
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className={labelCls}>Direction</label>
-                <select name="direction" className={inputCls}>
-                  <option value="issued">Issued (जारी)</option>
-                  <option value="received">Received (प्राप्त)</option>
-                </select>
-              </div>
-              <div>
-                <label className={labelCls}>Amount (₹)</label>
-                <input type="number" step="0.01" min="0" name="amount" required className={inputCls} />
-              </div>
+            <input type="hidden" name="direction" value="received" />
+            <div>
+              <label className={labelCls}>Amount (₹)</label>
+              <input type="number" step="0.01" min="0" name="amount" required className={inputCls} />
+            </div>
+            <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+              Manual issued/payment cheque entry disabled है। Payment cheques बाद में Bill & Budget और Staff Payment modules से automatic sync होंगे।
             </div>
             <div>
               <label className={labelCls}>Remarks</label>
               <input name="remarks" className={inputCls} />
             </div>
-            <button className={btnCls + " w-full"}>Add to Register</button>
+            <button className={btnCls + " w-full"}>Add Received Cheque</button>
           </form>
         </Card>
 
-        <Card title="Cheque Register" className="xl:col-span-2">
+        <Card
+          title={`Cheque Register (${rows.length}${
+            hasDateFilter && !invalidDateRange ? " filtered" : ""
+          })`}
+          className="xl:col-span-2"
+        >
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
@@ -121,7 +184,16 @@ export default async function ChequesPage() {
                 </tr>
               </thead>
               <tbody>
-                {rows.length === 0 && <EmptyRow colSpan={8} message="No cheques recorded yet." />}
+                {rows.length === 0 && (
+                  <EmptyRow
+                    colSpan={8}
+                    message={
+                      hasDateFilter
+                        ? "Selected date range में कोई cheque नहीं है।"
+                        : "No cheques recorded yet."
+                    }
+                  />
+                )}
                 {rows.map((c) => (
                   <tr key={c.id} className="hover:bg-slate-50">
                     <Td className="font-semibold">{c.chequeNo}</Td>
@@ -136,7 +208,7 @@ export default async function ChequesPage() {
                       <Badge color={statusColor(c.status)}>{c.status}</Badge>
                     </Td>
                     <Td>
-                      <form action={updateChequeStatus} className="flex items-center gap-1">
+                      <PinProtectedForm action={updateChequeStatus} className="flex items-center gap-1">
                         <input type="hidden" name="id" value={c.id} />
                         <select name="status" defaultValue={c.status} className="rounded border border-slate-300 px-1.5 py-1 text-xs">
                           <option value="pending">pending</option>
@@ -147,7 +219,7 @@ export default async function ChequesPage() {
                         <button className="rounded bg-slate-800 px-2 py-1 text-xs font-semibold text-white hover:bg-slate-700">
                           Set
                         </button>
-                      </form>
+                      </PinProtectedForm>
                     </Td>
                   </tr>
                 ))}

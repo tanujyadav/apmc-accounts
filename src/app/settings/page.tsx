@@ -1,6 +1,11 @@
 import Image from "next/image";
 import { db } from "@/db";
-import { apmcProfile, parties, ledgerHeads } from "@/db/schema";
+import {
+  apmcProfile,
+  cashbookOpeningBalances,
+  parties,
+  ledgerHeads,
+} from "@/db/schema";
 import { asc } from "drizzle-orm";
 import Link from "next/link";
 import {
@@ -10,9 +15,14 @@ import {
   deleteParty,
   addLedgerHead,
   updateLedgerHead,
+  changeSecurityPin,
+  setupInitialCashbookOpeningBalance,
 } from "@/lib/actions";
 import HindiField from "@/components/HindiField";
 import DeleteHeadButton from "@/components/DeleteHeadButton";
+import PinProtectedForm from "@/components/PinProtectedForm";
+import DataManagementPanel from "@/components/DataManagementPanel";
+import { currentFY, fmtDate, inr } from "@/lib/format";
 import {
   PageHeader, Card, StatCard, Th, Td, Badge, EmptyRow, inputCls, labelCls, btnCls,
 } from "@/components/ui";
@@ -28,15 +38,30 @@ const headColor = (t: string) =>
 export default async function SettingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ editHead?: string; headDelete?: string }>;
+  searchParams: Promise<{
+    editHead?: string;
+    headDelete?: string;
+    pinChanged?: string;
+    openingSetup?: string;
+  }>;
 }) {
-  const { editHead, headDelete } = await searchParams;
-  const [profiles, partyRows, heads] = await Promise.all([
+  const { editHead, headDelete, pinChanged, openingSetup } = await searchParams;
+  const [profiles, partyRows, heads, openingRows] = await Promise.all([
     db.select().from(apmcProfile).limit(1),
     db.select().from(parties).orderBy(asc(parties.name)),
     db.select().from(ledgerHeads).orderBy(asc(ledgerHeads.type), asc(ledgerHeads.code)),
+    db
+      .select()
+      .from(cashbookOpeningBalances)
+      .orderBy(asc(cashbookOpeningBalances.id))
+      .limit(1),
   ]);
   const profile = profiles[0];
+  const initialOpening = openingRows[0];
+  const setupFinancialYear = currentFY();
+  const setupStartYear = Number(setupFinancialYear.slice(0, 4));
+  const setupPeriodStart = `${setupStartYear}-04-01`;
+  const setupPeriodEnd = `${setupStartYear + 1}-03-31`;
   const editHeadId = editHead ? parseInt(editHead, 10) : null;
   const headBeingEdited = editHeadId ? heads.find((h) => h.id === editHeadId) : undefined;
 
@@ -63,6 +88,192 @@ export default async function SettingsPage({
         <StatCard label="Registered Parties" value={String(partyRows.length)} icon="🏪" accent="blue" />
         <StatCard label="Income Heads" value={String(heads.filter((h) => h.type === "income").length)} icon="📈" accent="emerald" />
         <StatCard label="Expense Heads" value={String(heads.filter((h) => h.type === "expense").length)} icon="📉" accent="red" />
+      </div>
+
+      <div id="initial-opening-balance" className="mt-6 scroll-mt-6">
+        <Card title="Initial Opening Balance Setup / प्रारम्भिक शेष की पहली सेटिंग">
+          {openingSetup === "success" && (
+            <p className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">
+              ✓ Initial Opening Balance successfully saved and permanently locked.
+            </p>
+          )}
+          {openingSetup === "locked" && (
+            <p className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+              Opening Balance पहले ही set है। इसे दोबारा edit या save नहीं किया जा सकता।
+            </p>
+          )}
+          {(openingSetup === "invalid" ||
+            openingSetup === "invalid-date") && (
+            <p className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-800">
+              Opening setup details valid नहीं हैं। Date selected Financial Year के अंदर होनी चाहिए।
+            </p>
+          )}
+
+          {initialOpening ? (
+            <div>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Financial Year
+                  </p>
+                  <p className="mt-1 text-lg font-bold text-slate-900">
+                    {initialOpening.financialYear}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Opening Date
+                  </p>
+                  <p className="mt-1 text-lg font-bold text-slate-900">
+                    {fmtDate(initialOpening.openingDate)}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
+                    Opening Cash
+                  </p>
+                  <p className="mt-1 text-lg font-bold text-emerald-900">
+                    {inr(initialOpening.openingCash)}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-blue-200 bg-blue-50 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">
+                    Opening Bank
+                  </p>
+                  <p className="mt-1 text-lg font-bold text-blue-900">
+                    {inr(initialOpening.openingBank)}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-white p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Status
+                  </p>
+                  <p className="mt-1 font-bold text-slate-800">🔒 Setup Locked</p>
+                </div>
+              </div>
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                <span>
+                  Remarks: {initialOpening.remarks || "Opening Balance b/f"}
+                </span>
+                <span className="text-xs">
+                  Operational Data Reset के बाद ही नया initial setup उपलब्ध होगा।
+                </span>
+              </div>
+            </div>
+          ) : (
+            <div>
+              <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                यह option केवल software पर accounting work शुरू करने से पहले एक बार उपलब्ध है। Save के बाद values edit नहीं होंगी।
+              </div>
+              <PinProtectedForm
+                action={setupInitialCashbookOpeningBalance}
+                purpose="Initial Opening Balance setup"
+                className="grid grid-cols-1 items-end gap-4 md:grid-cols-2 xl:grid-cols-5"
+              >
+                <input
+                  type="hidden"
+                  name="financialYear"
+                  value={setupFinancialYear}
+                />
+                <div>
+                  <label className={labelCls}>Financial Year</label>
+                  <div className="rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-800">
+                    {setupFinancialYear}
+                  </div>
+                </div>
+                <div>
+                  <label className={labelCls}>Opening Date / प्रारम्भिक दिनांक</label>
+                  <input
+                    type="date"
+                    name="openingDate"
+                    min={setupPeriodStart}
+                    max={setupPeriodEnd}
+                    defaultValue={setupPeriodStart}
+                    required
+                    className={inputCls}
+                  />
+                </div>
+                <div>
+                  <label className={labelCls}>Opening Cash / प्रारम्भिक रोकड़ (₹)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    name="openingCash"
+                    defaultValue="0.00"
+                    required
+                    className={inputCls}
+                  />
+                </div>
+                <div>
+                  <label className={labelCls}>Combined Opening Bank (₹)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    name="openingBank"
+                    defaultValue="0.00"
+                    required
+                    className={inputCls}
+                  />
+                </div>
+                <div>
+                  <label className={labelCls}>Remarks / टिप्पणी</label>
+                  <input
+                    name="remarks"
+                    placeholder="Opening Balance b/f"
+                    className={inputCls}
+                  />
+                </div>
+                <div className="md:col-span-2 xl:col-span-5">
+                  <button className={btnCls + " w-full"}>
+                    Save & Lock Initial Opening Balance
+                  </button>
+                </div>
+              </PinProtectedForm>
+            </div>
+          )}
+        </Card>
+      </div>
+
+      <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-3">
+        <Card title="Security PIN / सुरक्षा पिन">
+          {pinChanged === "success" && (
+            <p className="mb-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700">
+              ✓ Security PIN successfully changed.
+            </p>
+          )}
+          {pinChanged === "invalid" && (
+            <p className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
+              Current PIN is incorrect.
+            </p>
+          )}
+          {pinChanged === "mismatch" && (
+            <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-700">
+              New PIN must be 4–8 digits and both entries must match.
+            </p>
+          )}
+          <form action={changeSecurityPin} className="space-y-3">
+            <div>
+              <label className={labelCls}>Current PIN</label>
+              <input type="password" inputMode="numeric" name="currentPin" required className={inputCls} />
+            </div>
+            <div>
+              <label className={labelCls}>New PIN (4–8 digits)</label>
+              <input type="password" inputMode="numeric" pattern="[0-9]{4,8}" name="newPin" required className={inputCls} />
+            </div>
+            <div>
+              <label className={labelCls}>Confirm New PIN</label>
+              <input type="password" inputMode="numeric" pattern="[0-9]{4,8}" name="confirmPin" required className={inputCls} />
+            </div>
+            <button className={btnCls + " w-full"}>Change Security PIN</button>
+          </form>
+          <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            Fresh installation default PIN: <strong>1234</strong>. इसे official use से पहले बदलें।
+          </p>
+        </Card>
+
+        <Card title="Data Backup & Reset / डाटा बैकअप एवं रीसेट" className="xl:col-span-2">
+          <DataManagementPanel />
+        </Card>
       </div>
 
       {/* ---------- APMC Profile ---------- */}
@@ -96,7 +307,11 @@ export default async function SettingsPage({
               </p>
             </div>
           </div>
-          <form action={saveApmcProfile} className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          <PinProtectedForm
+            action={saveApmcProfile}
+            purpose="APMC Profile update"
+            className="grid grid-cols-1 gap-4 md:grid-cols-3"
+          >
             <div>
               <label className={labelCls}>Mandi Name (English) *</label>
               <input name="mandiName" defaultValue={profile?.mandiName ?? ""} placeholder="Krishi Utpadan Mandi Samiti, Lucknow" required className={inputCls} />
@@ -136,7 +351,7 @@ export default async function SettingsPage({
             <div className="flex items-end">
               <button className={btnCls + " w-full"}>💾 Save Profile</button>
             </div>
-          </form>
+          </PinProtectedForm>
         </Card>
       </div>
 
@@ -241,21 +456,28 @@ export default async function SettingsPage({
                     </Td>
                     <Td className="text-xs">{p.gstin ?? "-"}</Td>
                     <Td>
-                      <form action={togglePartyStatus}>
+                      <PinProtectedForm
+                        action={togglePartyStatus}
+                        purpose="Party status update"
+                      >
                         <input type="hidden" name="id" value={p.id} />
                         <input type="hidden" name="status" value={p.status} />
                         <button title="Toggle status">
                           <Badge color={p.status === "active" ? "green" : "slate"}>{p.status}</Badge>
                         </button>
-                      </form>
+                      </PinProtectedForm>
                     </Td>
                     <Td>
-                      <form action={deleteParty}>
+                      <PinProtectedForm
+                        action={deleteParty}
+                        purpose="Party delete"
+                        confirmMessage={`Delete ${p.name}? This cannot be undone.`}
+                      >
                         <input type="hidden" name="id" value={p.id} />
                         <button className="text-xs font-semibold text-red-500 hover:text-red-700" title="Delete party">
                           ✕
                         </button>
-                      </form>
+                      </PinProtectedForm>
                     </Td>
                   </tr>
                 ))}
@@ -274,9 +496,11 @@ export default async function SettingsPage({
               : "Add Income / Expense Head"
           }
         >
-          <form
+          <PinProtectedForm
             key={headBeingEdited?.id ?? "new"}
             action={headBeingEdited ? updateLedgerHead : addLedgerHead}
+            enabled={Boolean(headBeingEdited)}
+            purpose="Income/Expense Head update"
             className="space-y-3"
           >
             {headBeingEdited && (
@@ -327,7 +551,7 @@ export default async function SettingsPage({
               Warning: deleting a head also permanently deletes every cashbook entry,
               bill and budget assigned to it.
             </p>
-          </form>
+          </PinProtectedForm>
         </Card>
 
         <Card title={`Income & Expense Head Master (${heads.length})`} className="xl:col-span-2">

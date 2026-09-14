@@ -28,7 +28,6 @@ type CreditRow = {
   key: number;
   headId: number;
   destination: "cash" | "bank";
-  bankId: number;
   amount: string;
 };
 
@@ -97,6 +96,8 @@ export default function CashbookEntryForms({
   parties,
   defaultDate,
   financialYear,
+  returnFrom,
+  returnTo,
   receiptReference,
   paymentReference,
 }: {
@@ -106,20 +107,21 @@ export default function CashbookEntryForms({
   parties: Party[];
   defaultDate: string;
   financialYear: string;
+  returnFrom?: string;
+  returnTo?: string;
   receiptReference: string;
   paymentReference: string;
 }) {
   const [open, setOpen] = useState<"credit" | "debit" | null>(null);
   const [rowSequence, setRowSequence] = useState(2);
   const [sourceMode, setSourceMode] = useState("cash");
-  const [paymentMode, setPaymentMode] = useState("bank");
   const defaultIncomeId = incomeHeads[0]?.id ?? 0;
+  const [debitHeadId, setDebitHeadId] = useState(expenseHeads[0]?.id ?? 0);
   const [creditRows, setCreditRows] = useState<CreditRow[]>([
     {
       key: 1,
       headId: defaultIncomeId,
       destination: "cash",
-      bankId: banks[0]?.id ?? 0,
       amount: "",
     },
   ]);
@@ -127,6 +129,10 @@ export default function CashbookEntryForms({
   const receiptTotal = useMemo(
     () => creditRows.reduce((sum, row) => sum + (Number(row.amount) || 0), 0),
     [creditRows],
+  );
+  const hasMissingFixedBank = creditRows.some(
+    (row) =>
+      row.destination === "bank" && fixedBankForHead(row.headId) === undefined,
   );
 
   function addCreditRow(headId = defaultIncomeId) {
@@ -136,7 +142,6 @@ export default function CashbookEntryForms({
         key: rowSequence,
         headId,
         destination: "cash",
-        bankId: banks[0]?.id ?? 0,
         amount: "",
       },
     ]);
@@ -156,7 +161,6 @@ export default function CashbookEntryForms({
         key: rowSequence + index,
         headId: head.id,
         destination: "cash",
-        bankId: banks[0]?.id ?? 0,
         amount: "",
       })),
     );
@@ -168,6 +172,26 @@ export default function CashbookEntryForms({
       rows.map((row) => (row.key === key ? { ...row, ...patch } : row)),
     );
   }
+
+  function fixedBankForHead(headId: number): Bank | undefined {
+    const headCode = incomeHeads.find((head) => head.id === headId)?.code;
+    const accountNumber =
+      headCode === "1-B"
+        ? "30410641195"
+        : headCode === "5-E" || headCode === "7"
+          ? "30386343784"
+          : "30386329769";
+    return banks.find((bank) => bank.accountNumber === accountNumber);
+  }
+
+  function fixedBankForDebitHead(headId: number): Bank | undefined {
+    const headCode = expenseHeads.find((head) => head.id === headId)?.code;
+    const accountNumber =
+      headCode === "EXP-36" ? "30410641195" : "30386329769";
+    return banks.find((bank) => bank.accountNumber === accountNumber);
+  }
+
+  const selectedDebitBank = fixedBankForDebitHead(debitHeadId);
 
   return (
     <>
@@ -217,6 +241,8 @@ export default function CashbookEntryForms({
         >
           <form action={addCashbookReceipt}>
             <input type="hidden" name="returnFinancialYear" value={financialYear} />
+            <input type="hidden" name="returnFrom" value={returnFrom ?? ""} />
+            <input type="hidden" name="returnTo" value={returnTo ?? ""} />
             <div className="space-y-6 p-6">
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
@@ -260,9 +286,15 @@ export default function CashbookEntryForms({
                   </button>
                 </div>
 
+                <div className="mt-4 grid gap-2 rounded-xl border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800 sm:grid-cols-3">
+                  <p><strong>1-B विकास सेस:</strong> SBI APMC CESS · 30410641195</p>
+                  <p><strong>5-E GST एवं 7 अनुदान:</strong> SBI APMC PAYMENT · 30386343784</p>
+                  <p><strong>बाकी सभी Income Heads:</strong> SBI APMC DEPOSIT · 30386329769</p>
+                </div>
+
                 <div className="mt-4 space-y-4">
                   {creditRows.map((row, index) => {
-                    const selectedBank = banks.find((bank) => bank.id === row.bankId);
+                    const selectedBank = fixedBankForHead(row.headId);
                     return (
                       <div
                         key={row.key}
@@ -354,24 +386,28 @@ export default function CashbookEntryForms({
                               </button>
                             </div>
                             {row.destination === "bank" ? (
-                              <select
-                                name="bankAccountId"
-                                value={row.bankId}
-                                onChange={(event) =>
-                                  updateRow(row.key, {
-                                    bankId: Number(event.target.value),
-                                  })
-                                }
-                                required
-                                className={fieldClass + " mt-2"}
-                              >
-                                <option value="">-- select bank account --</option>
-                                {banks.map((bank) => (
-                                  <option key={bank.id} value={bank.id}>
-                                    {bank.bankName} ····{bank.accountNumber.slice(-4)}
-                                  </option>
-                                ))}
-                              </select>
+                              selectedBank ? (
+                                <div className="mt-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2.5">
+                                  <input
+                                    type="hidden"
+                                    name="bankAccountId"
+                                    value={selectedBank.id}
+                                  />
+                                  <p className="text-xs font-bold text-blue-800">
+                                    🔒 Fixed Bank Account / निर्धारित बैंक खाता
+                                  </p>
+                                  <p className="mt-1 text-sm font-semibold text-slate-800">
+                                    {selectedBank.bankName}
+                                  </p>
+                                  <p className="text-xs text-slate-500">
+                                    A/C {selectedBank.accountNumber} · {selectedBank.branch}
+                                  </p>
+                                </div>
+                              ) : (
+                                <div className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">
+                                  Required fixed bank account is missing. Add it in Bank Accounts.
+                                </div>
+                              )
                             ) : (
                               <input type="hidden" name="bankAccountId" value="" />
                             )}
@@ -477,7 +513,10 @@ export default function CashbookEntryForms({
               >
                 Cancel
               </button>
-              <button className="rounded-lg bg-emerald-600 px-8 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-700">
+              <button
+                disabled={hasMissingFixedBank}
+                className="rounded-lg bg-emerald-600 px-8 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+              >
                 Save Credit Entry
               </button>
             </div>
@@ -493,6 +532,8 @@ export default function CashbookEntryForms({
         >
           <form action={addCashbookPayment}>
             <input type="hidden" name="returnFinancialYear" value={financialYear} />
+            <input type="hidden" name="returnFrom" value={returnFrom ?? ""} />
+            <input type="hidden" name="returnTo" value={returnTo ?? ""} />
             <div className="space-y-5 p-6">
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
@@ -517,15 +558,28 @@ export default function CashbookEntryForms({
               </div>
 
               <div>
-                <label className={labelClass}>Select Expense Head *</label>
-                <select name="ledgerHeadId" required className={fieldClass}>
-                  <option value="">-- select expense head --</option>
+                <label className={labelClass}>Select Direct Debit Head *</label>
+                <select
+                  name="ledgerHeadId"
+                  value={debitHeadId}
+                  onChange={(event) => setDebitHeadId(Number(event.target.value))}
+                  required
+                  className={fieldClass}
+                >
+                  <option value="">-- select direct debit head --</option>
                   {expenseHeads.map((head) => (
                     <option key={head.id} value={head.id}>
                       {head.nameHindi ?? head.name} [{head.code}] / {head.name}
                     </option>
                   ))}
                 </select>
+                <div className="mt-2 grid gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 sm:grid-cols-2">
+                  <p><strong>EXP-35 मंडी शुल्क कटौती:</strong> SBI APMC DEPOSIT · 30386329769</p>
+                  <p><strong>EXP-36 विकास सेस कटौती:</strong> SBI APMC CESS · 30410641195</p>
+                </div>
+                <p className="mt-2 text-xs text-slate-500">
+                  बाकी Expense Heads Bill & Budget या Staff Payment module से debit होंगे और यहाँ hidden हैं।
+                </p>
               </div>
 
               <div className="grid gap-4 sm:grid-cols-2">
@@ -534,7 +588,7 @@ export default function CashbookEntryForms({
                   <input
                     name="partyName"
                     list="cashbook-party-directory"
-                    placeholder="e.g. Office Supplier"
+                    defaultValue="Mandi Parishad Auto Withdrawal"
                     required
                     className={fieldClass}
                   />
@@ -544,53 +598,37 @@ export default function CashbookEntryForms({
                 </div>
                 <div>
                   <label className={labelClass}>Mode of Entry</label>
-                  <select
-                    name="mode"
-                    value={paymentMode}
-                    onChange={(event) => setPaymentMode(event.target.value)}
-                    className={fieldClass}
-                  >
-                    <option value="bank">Bank RTGS / NEFT / Transfer</option>
-                    <option value="cheque">Bank Cheque</option>
-                    <option value="cash">Cash Payment</option>
-                  </select>
+                  <input type="hidden" name="mode" value="bank" />
+                  <div className="rounded-lg border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm font-semibold text-slate-700">
+                    🔒 Automatic Bank Debit / स्वतः बैंक कटौती
+                  </div>
                 </div>
               </div>
 
-              {paymentMode !== "cash" && (
-                <section className="rounded-xl border border-blue-200 bg-blue-50 p-5">
-                  <h3 className="text-sm font-bold text-slate-700">
-                    Selected Payment / Debit Bank Account
-                  </h3>
-                  <select
-                    name="bankAccountId"
-                    required
-                    className={fieldClass + " mt-3"}
-                  >
-                    <option value="">-- select committee bank account --</option>
-                    {banks.map((bank) => (
-                      <option key={bank.id} value={bank.id}>
-                        {bank.bankName} — {bank.branch} — A/C ····
-                        {bank.accountNumber.slice(-4)}
-                      </option>
-                    ))}
-                  </select>
-                  <p className="mt-2 text-xs text-blue-700">
-                    ℹ वह Committee Bank Account चुनें जिससे राशि debit हुई है।
+              <section className="rounded-xl border border-blue-200 bg-blue-50 p-5">
+                <h3 className="text-sm font-bold text-slate-700">
+                  Fixed Payment / Debit Bank Account
+                </h3>
+                {selectedDebitBank ? (
+                  <div className="mt-3 rounded-lg border border-blue-200 bg-white px-4 py-3">
+                    <input
+                      type="hidden"
+                      name="bankAccountId"
+                      value={selectedDebitBank.id}
+                    />
+                    <p className="font-semibold text-slate-900">
+                      {selectedDebitBank.bankName}
+                    </p>
+                    <p className="mt-0.5 text-sm text-slate-500">
+                      A/C {selectedDebitBank.accountNumber} · {selectedDebitBank.branch}
+                    </p>
+                  </div>
+                ) : (
+                  <p className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
+                    Required fixed bank account is missing. Add it in Bank Accounts.
                   </p>
-                </section>
-              )}
-
-              {paymentMode === "cash" && (
-                <input type="hidden" name="bankAccountId" value="" />
-              )}
-
-              {paymentMode === "cheque" && (
-                <div>
-                  <label className={labelClass}>Cheque Number *</label>
-                  <input name="chequeNo" required className={fieldClass} />
-                </div>
-              )}
+                )}
+              </section>
 
               <div>
                 <label className={labelClass}>Amount (₹) *</label>
@@ -626,7 +664,10 @@ export default function CashbookEntryForms({
               >
                 Cancel
               </button>
-              <button className="rounded-lg bg-red-600 px-8 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-red-700">
+              <button
+                disabled={!selectedDebitBank || !debitHeadId}
+                className="rounded-lg bg-red-600 px-8 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+              >
                 Save Debit Entry
               </button>
             </div>

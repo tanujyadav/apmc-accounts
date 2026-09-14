@@ -1,3 +1,4 @@
+import PinProtectedForm from "@/components/PinProtectedForm";
 import { db } from "@/db";
 import {
   bankAccounts,
@@ -11,7 +12,7 @@ import {
 import { and, asc, desc, eq, gte, lte } from "drizzle-orm";
 import CashbookEntryForms from "@/components/CashbookEntryForms";
 import { Card, PageHeader, StatCard, inputCls, labelCls, btnCls } from "@/components/ui";
-import { deleteCashbookEntry, saveCashbookOpeningBalance } from "@/lib/actions";
+import { deleteCashbookEntry } from "@/lib/actions";
 import { currentFY, fmtDate, inr, num, todayISO } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -22,9 +23,9 @@ const thClass =
 export default async function CashbookPage({
   searchParams,
 }: {
-  searchParams: Promise<{ fy?: string; balanceSaved?: string }>;
+  searchParams: Promise<{ fy?: string; from?: string; to?: string }>;
 }) {
-  const { fy, balanceSaved } = await searchParams;
+  const { fy, from, to } = await searchParams;
   const selectedFY = fy || currentFY();
   const parsedStartYear = Number(selectedFY.slice(0, 4));
   const startYear = Number.isFinite(parsedStartYear)
@@ -65,27 +66,79 @@ export default async function CashbookPage({
   ]);
   const openingBalance = openingRows[0];
   const openingDate = openingBalance?.openingDate || periodStart;
-  const entries = allEntries.filter((entry) => entry.entryDate >= openingDate);
+  const accountingStart = openingDate > periodStart ? openingDate : periodStart;
+  const validFrom = /^\d{4}-\d{2}-\d{2}$/.test(from ?? "") ? from! : null;
+  const validTo = /^\d{4}-\d{2}-\d{2}$/.test(to ?? "") ? to! : null;
+  const hasDateFilter = Boolean(validFrom || validTo);
+  const requestedRangeStart = validFrom ?? accountingStart;
+  const requestedRangeEnd = validTo ?? periodEnd;
+  const clampedRangeStart =
+    requestedRangeStart < accountingStart
+      ? accountingStart
+      : requestedRangeStart > periodEnd
+        ? periodEnd
+        : requestedRangeStart;
+  const clampedRangeEnd =
+    requestedRangeEnd > periodEnd
+      ? periodEnd
+      : requestedRangeEnd < accountingStart
+        ? accountingStart
+        : requestedRangeEnd;
+  const invalidDateRange = clampedRangeStart > clampedRangeEnd;
+  const rangeStart = invalidDateRange ? accountingStart : clampedRangeStart;
+  const rangeEnd = invalidDateRange ? periodEnd : clampedRangeEnd;
+  const accountingEntries = allEntries.filter(
+    (entry) => entry.entryDate >= accountingStart,
+  );
+  const carryForwardEntries = hasDateFilter
+    ? accountingEntries.filter((entry) => entry.entryDate < rangeStart)
+    : [];
+  const entries = accountingEntries.filter(
+    (entry) => entry.entryDate >= rangeStart && entry.entryDate <= rangeEnd,
+  );
 
   const headMap = new Map(heads.map((head) => [head.id, head]));
   const bankMap = new Map(banks.map((bank) => [bank.id, bank]));
   const depositMap = new Map(depositRows.map((deposit) => [deposit.id, deposit]));
   const allocationsByReceipt = new Map<number, typeof depositAllocations>();
+  const allocationsByOpening = new Map<number, typeof depositAllocations>();
   for (const allocation of depositAllocations) {
-    const list = allocationsByReceipt.get(allocation.cashbookEntryId) ?? [];
-    list.push(allocation);
-    allocationsByReceipt.set(allocation.cashbookEntryId, list);
+    if (allocation.cashbookEntryId !== null) {
+      const list = allocationsByReceipt.get(allocation.cashbookEntryId) ?? [];
+      list.push(allocation);
+      allocationsByReceipt.set(allocation.cashbookEntryId, list);
+    }
+    if (allocation.cashbookOpeningBalanceId !== null) {
+      const list =
+        allocationsByOpening.get(allocation.cashbookOpeningBalanceId) ?? [];
+      list.push(allocation);
+      allocationsByOpening.set(allocation.cashbookOpeningBalanceId, list);
+    }
   }
-  const applicableDeposits = depositRows.filter(
+  const openingAllocations = openingBalance
+    ? allocationsByOpening.get(openingBalance.id) ?? []
+    : [];
+  const accountingDeposits = depositRows.filter(
     (deposit) =>
-      deposit.depositDate >= openingDate && deposit.depositDate <= periodEnd,
+      deposit.depositDate >= accountingStart &&
+      deposit.depositDate <= periodEnd,
+  );
+  const carryForwardDeposits = hasDateFilter
+    ? accountingDeposits.filter((deposit) => deposit.depositDate < rangeStart)
+    : [];
+  const applicableDeposits = accountingDeposits.filter(
+    (deposit) =>
+      deposit.depositDate >= rangeStart && deposit.depositDate <= rangeEnd,
   );
   const cashDepositedToBank = applicableDeposits.reduce(
     (sum, deposit) => sum + num(deposit.amount),
     0,
   );
   const incomeHeads = heads.filter((head) => head.type === "income");
-  const expenseHeads = heads.filter((head) => head.type === "expense");
+  const directDebitCodes = new Set(["EXP-35", "EXP-36"]);
+  const expenseHeads = heads.filter(
+    (head) => head.type === "expense" && directDebitCodes.has(head.code),
+  );
 
   const directCash = entries
     .filter((entry) => entry.entryType === "receipt" && entry.mode === "cash")
@@ -101,8 +154,32 @@ export default async function CashbookPage({
     .reduce((sum, entry) => sum + num(entry.amount), 0);
   const debitPayments = cashPayments + bankPayments;
   const totalCredit = directCash + directBank;
-  const openingCash = num(openingBalance?.openingCash);
-  const openingBank = num(openingBalance?.openingBank);
+  const carryCashReceipts = carryForwardEntries
+    .filter((entry) => entry.entryType === "receipt" && entry.mode === "cash")
+    .reduce((sum, entry) => sum + num(entry.amount), 0);
+  const carryBankReceipts = carryForwardEntries
+    .filter((entry) => entry.entryType === "receipt" && entry.mode !== "cash")
+    .reduce((sum, entry) => sum + num(entry.amount), 0);
+  const carryCashPayments = carryForwardEntries
+    .filter((entry) => entry.entryType === "payment" && entry.mode === "cash")
+    .reduce((sum, entry) => sum + num(entry.amount), 0);
+  const carryBankPayments = carryForwardEntries
+    .filter((entry) => entry.entryType === "payment" && entry.mode !== "cash")
+    .reduce((sum, entry) => sum + num(entry.amount), 0);
+  const carryCashDeposits = carryForwardDeposits.reduce(
+    (sum, deposit) => sum + num(deposit.amount),
+    0,
+  );
+  const openingCash =
+    num(openingBalance?.openingCash) +
+    carryCashReceipts -
+    carryCashPayments -
+    carryCashDeposits;
+  const openingBank =
+    num(openingBalance?.openingBank) +
+    carryBankReceipts -
+    carryBankPayments +
+    carryCashDeposits;
   const closingCash =
     openingCash + directCash - cashPayments - cashDepositedToBank;
   const closingBank =
@@ -112,9 +189,9 @@ export default async function CashbookPage({
 
   const year = new Date().getFullYear();
   const receiptCount =
-    entries.filter((entry) => entry.entryType === "receipt").length + 1;
+    accountingEntries.filter((entry) => entry.entryType === "receipt").length + 1;
   const paymentCount =
-    entries.filter((entry) => entry.entryType === "payment").length + 1;
+    accountingEntries.filter((entry) => entry.entryType === "payment").length + 1;
   const receiptReference = `7R-${year}-${String(receiptCount).padStart(3, "0")}`;
   const paymentReference = `VCH-PAY-${String(paymentCount).padStart(4, "0")}`;
   const defaultEntryDate =
@@ -129,7 +206,11 @@ export default async function CashbookPage({
       <PageHeader
         title="Cashbook Register"
         hindi="रोकड़बही"
-        subtitle={`Daily credit, debit, opening and closing balance register · FY ${selectedFY}`}
+        subtitle={`Daily credit, debit and balance register · FY ${selectedFY}${
+          hasDateFilter
+            ? ` · ${fmtDate(rangeStart)} to ${fmtDate(rangeEnd)}`
+            : ""
+        }`}
       />
 
       <form
@@ -160,73 +241,68 @@ export default async function CashbookPage({
         </span>
       </form>
 
-      {balanceSaved === "1" && (
-        <div className="mb-5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">
-          ✓ FY {selectedFY} का Cash और Bank Opening Balance save हो गया है।
+      <form
+        method="get"
+        className="mb-5 flex flex-wrap items-end gap-3 rounded-xl border border-blue-200 bg-blue-50/50 p-4 shadow-sm"
+      >
+        <input type="hidden" name="fy" value={selectedFY} />
+        <div>
+          <label className={labelCls}>From Date / दिनांक से</label>
+          <input
+            type="date"
+            name="from"
+            min={accountingStart}
+            max={periodEnd}
+            defaultValue={validFrom ?? ""}
+            className={inputCls}
+          />
+        </div>
+        <div>
+          <label className={labelCls}>To Date / दिनांक तक</label>
+          <input
+            type="date"
+            name="to"
+            min={accountingStart}
+            max={periodEnd}
+            defaultValue={validTo ?? ""}
+            className={inputCls}
+          />
+        </div>
+        <button className={btnCls}>Apply Date Filter</button>
+        {hasDateFilter && (
+          <a
+            href={`/cashbook?fy=${encodeURIComponent(selectedFY)}`}
+            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+          >
+            Clear Filter
+          </a>
+        )}
+        <span className="pb-2 text-xs text-slate-500">
+          {hasDateFilter
+            ? `Showing ${fmtDate(rangeStart)} to ${fmtDate(rangeEnd)}`
+            : "No date filter applied"}
+        </span>
+      </form>
+
+      {invalidDateRange && (
+        <div className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-800">
+          From Date, To Date से बाद की नहीं हो सकती। अभी पूरा Financial Year दिखाया जा रहा है।
         </div>
       )}
 
-      <div id="opening-balance">
-        <Card title={`Opening Balance / प्रारम्भिक शेष · FY ${selectedFY}`}>
-          <form action={saveCashbookOpeningBalance} className="grid grid-cols-1 items-end gap-4 md:grid-cols-2 xl:grid-cols-5">
-            <input type="hidden" name="financialYear" value={selectedFY} />
-            <div>
-              <label className={labelCls}>Opening Date / प्रारम्भिक दिनांक</label>
-              <input
-                type="date"
-                name="openingDate"
-                min={periodStart}
-                max={periodEnd}
-                defaultValue={openingDate}
-                className={inputCls}
-                required
-              />
-            </div>
-            <div>
-              <label className={labelCls}>Opening Cash / प्रारम्भिक रोकड़ (₹)</label>
-              <input
-                type="number"
-                step="0.01"
-                name="openingCash"
-                defaultValue={openingBalance?.openingCash ?? "0.00"}
-                className={inputCls}
-                required
-              />
-            </div>
-            <div>
-              <label className={labelCls}>Opening Bank / प्रारम्भिक बैंक शेष (₹)</label>
-              <input
-                type="number"
-                step="0.01"
-                name="openingBank"
-                defaultValue={openingBalance?.openingBank ?? "0.00"}
-                className={inputCls}
-                required
-              />
-            </div>
-            <div>
-              <label className={labelCls}>Remarks / टिप्पणी</label>
-              <input
-                name="remarks"
-                defaultValue={openingBalance?.remarks ?? ""}
-                placeholder="Opening Balance b/f"
-                className={inputCls}
-              />
-            </div>
-            <button className={btnCls + " w-full"}>Save / Update Opening</button>
-          </form>
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
-            <span>Bank amount में सभी Committee Bank Accounts का combined opening balance दर्ज करें।</span>
-            {openingBalance?.updatedAt && (
-              <span>Last updated: {openingBalance.updatedAt.toLocaleString("en-IN")}</span>
-            )}
-          </div>
-        </Card>
-      </div>
+      {!openingBalance && (
+        <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          Initial Opening Balance अभी set नहीं है। First-time setup केवल Profile & Settings module में उपलब्ध है।
+        </div>
+      )}
 
-      <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
-          label="Opening Total / प्रारम्भिक शेष"
+          label={
+            hasDateFilter
+              ? "Balance B/F / आगे लाया शेष"
+              : "Opening Total / प्रारम्भिक शेष"
+          }
           value={inr(combinedOpening)}
           icon="🔓"
           accent="amber"
@@ -279,6 +355,8 @@ export default async function CashbookPage({
             }))}
             defaultDate={defaultEntryDate}
             financialYear={selectedFY}
+            returnFrom={hasDateFilter && !invalidDateRange ? validFrom ?? undefined : undefined}
+            returnTo={hasDateFilter && !invalidDateRange ? validTo ?? undefined : undefined}
             receiptReference={receiptReference}
             paymentReference={paymentReference}
           />
@@ -322,21 +400,23 @@ export default async function CashbookPage({
               <tbody className="bg-white">
                 <tr className="border-b-2 border-amber-200 bg-amber-50/70 text-sm text-slate-800">
                   <td className="whitespace-nowrap border-r border-amber-100 px-3 py-4 font-mono font-bold text-amber-800">
-                    {fmtDate(openingDate)}
+                    {fmtDate(hasDateFilter ? rangeStart : openingDate)}
                   </td>
                   <td className="border-r border-amber-100 px-3 py-4 font-mono font-bold text-amber-800">
-                    OB
+                    {hasDateFilter ? "B/F" : "OB"}
                   </td>
                   <td className="border-r border-amber-100 px-3 py-4">
                     <span className="inline-flex rounded-lg border border-amber-300 bg-amber-100 px-3 py-1 text-xs font-bold tracking-wide text-amber-800">
-                      OPENING
+                      {hasDateFilter ? "B/F" : "OPENING"}
                     </span>
                   </td>
                   <td className="min-w-56 border-r border-amber-100 px-3 py-4">
-                    <span className="font-bold text-slate-900">प्रारम्भिक शेष</span>
+                    <span className="font-bold text-slate-900">
+                      {hasDateFilter ? "आगे लाया शेष" : "प्रारम्भिक शेष"}
+                    </span>
                     <br />
                     <span className="text-xs font-semibold text-slate-500">
-                      Opening Balance
+                      {hasDateFilter ? "Balance Brought Forward" : "Opening Balance"}
                     </span>
                   </td>
                   <td className="min-w-44 border-r border-amber-100 px-3 py-4 font-semibold text-slate-600">
@@ -344,10 +424,35 @@ export default async function CashbookPage({
                   </td>
                   <td className="min-w-64 border-r border-amber-100 px-3 py-4">
                     <span className="font-semibold text-slate-700">
-                      {openingBalance?.remarks || "Opening Balance b/f"}
+                      {hasDateFilter
+                        ? `Balance B/F before ${fmtDate(rangeStart)}`
+                        : openingBalance?.remarks || "Opening Balance b/f"}
                     </span>
                     <br />
-                    <span className="text-xs text-slate-500">FY {selectedFY}</span>
+                    <span className="text-xs text-slate-500">
+                      FY {selectedFY}
+                      {hasDateFilter
+                        ? ` · Filtered through ${fmtDate(rangeEnd)}`
+                        : ""}
+                    </span>
+                    {!hasDateFilter && openingAllocations.length > 0 && (
+                      <div className="mt-2 space-y-1">
+                        {openingAllocations.map((allocation) => {
+                          const deposit = depositMap.get(allocation.cashDepositId);
+                          const depositBank = deposit
+                            ? bankMap.get(deposit.bankAccountId)
+                            : null;
+                          return (
+                            <p
+                              key={allocation.id}
+                              className="rounded-md border border-blue-100 bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-800"
+                            >
+                              🏦 Opening Cash deposited on {fmtDate(deposit?.depositDate)} · Slip {deposit?.slipNo ?? "-"} · {depositBank?.bankName ?? "Bank"} · {inr(allocation.allocatedAmount)}
+                            </p>
+                          );
+                        })}
+                      </div>
+                    )}
                   </td>
                   <td className="border-r border-emerald-100 bg-emerald-50 px-3 py-4 text-right font-bold tabular-nums text-emerald-800">
                     {inr(openingCash)}
@@ -359,12 +464,9 @@ export default async function CashbookPage({
                     —
                   </td>
                   <td className="px-3 py-4 text-center">
-                    <a
-                      href="#opening-balance"
-                      className="whitespace-nowrap text-xs font-semibold text-amber-700 hover:text-amber-900"
-                    >
-                      ✏️ Edit Opening
-                    </a>
+                    <span className="whitespace-nowrap rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-500">
+                      {hasDateFilter ? "Period B/F" : "Initial Setup"}
+                    </span>
                   </td>
                 </tr>
 
@@ -474,7 +576,7 @@ export default async function CashbookPage({
                           >
                             🖨️ Print
                           </a>
-                          <form action={deleteCashbookEntry}>
+                          <PinProtectedForm action={deleteCashbookEntry}>
                             <input type="hidden" name="id" value={entry.id} />
                             <button
                               className="text-xs font-semibold text-red-500 hover:text-red-700"
@@ -482,7 +584,7 @@ export default async function CashbookPage({
                             >
                               Delete
                             </button>
-                          </form>
+                          </PinProtectedForm>
                         </div>
                       </td>
                     </tr>

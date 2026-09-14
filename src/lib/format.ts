@@ -34,3 +34,28 @@ export function currentFY(): string {
 export function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
 }
+
+/** Return the Indian financial year (April–March) for an ISO date. */
+export function financialYearForDate(isoDate: string): string {
+  const [yearPart, monthPart] = isoDate.split("-");
+  const year = Number(yearPart);
+  const month = Number(monthPart);
+  if (!Number.isFinite(year) || !Number.isFinite(month)) return currentFY();
+  const start = month >= 4 ? year : year - 1;
+  return `${start}-${String(start + 1).slice(-2)}`;
+}
+
+export function monthYearLabel(isoDate: string): string {
+  const date = new Date(`${isoDate.slice(0, 7)}-01T00:00:00`);
+  if (Number.isNaN(date.getTime())) return isoDate.slice(0, 7);
+  return date.toLocaleDateString("en-IN", {
+    month: "long",
+    year: "numeric",
+  });
+}
+
+export function financialYearRange(fromDate: string, toDate: string): string {
+  const fromFY = financialYearForDate(fromDate);
+  const toFY = financialYearForDate(toDate);
+  return fromFY === toFY ? fromFY : `${fromFY} से ${toFY}`;
+}

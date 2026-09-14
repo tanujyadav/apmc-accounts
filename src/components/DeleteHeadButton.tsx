@@ -1,6 +1,7 @@
 "use client";
 
 import { deleteLedgerHead } from "@/lib/actions";
+import PinProtectedForm from "@/components/PinProtectedForm";
 
 export default function DeleteHeadButton({
   id,
@@ -10,14 +11,10 @@ export default function DeleteHeadButton({
   name: string;
 }) {
   return (
-    <form
+    <PinProtectedForm
       action={deleteLedgerHead}
-      onSubmit={(event) => {
-        const confirmed = window.confirm(
-          `Delete “${name}”?\n\nThis will also permanently delete all cashbook entries, bills and budgets linked to this head. This action cannot be undone.`,
-        );
-        if (!confirmed) event.preventDefault();
-      }}
+      purpose="Head delete"
+      confirmMessage={`Delete “${name}”?\n\nThis will also permanently delete linked Cashbook entries, bills, budgets and revenue targets. This action cannot be undone.`}
     >
       <input type="hidden" name="id" value={id} />
       <button
@@ -27,6 +24,6 @@ export default function DeleteHeadButton({
       >
         🗑️ Delete
       </button>
-    </form>
+    </PinProtectedForm>
   );
 }

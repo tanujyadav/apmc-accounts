@@ -1,3 +1,4 @@
+import PinProtectedForm from "@/components/PinProtectedForm";
 import { db } from "@/db";
 import { shops, shopCollections } from "@/db/schema";
 import { asc, desc } from "drizzle-orm";
@@ -218,7 +219,7 @@ export default async function ShopRentPage() {
                       <Td>
                         <Badge color={collectionColor(row.status)}>{row.status}</Badge>
                         {row.status !== "paid" && (
-                          <form action={updateShopCollection} className="mt-2 grid min-w-56 grid-cols-2 gap-1">
+                          <PinProtectedForm action={updateShopCollection} className="mt-2 grid min-w-56 grid-cols-2 gap-1">
                             <input type="hidden" name="id" value={row.id} />
                             <input type="hidden" name="rentAmount" value={row.rentAmount} />
                             <input type="hidden" name="premiumAmount" value={row.premiumAmount} />
@@ -232,7 +233,7 @@ export default async function ShopRentPage() {
                               <option value="cheque">Cheque</option>
                             </select>
                             <button className="col-span-2 rounded bg-emerald-600 px-2 py-1 text-xs font-semibold text-white">Update Collection</button>
-                          </form>
+                          </PinProtectedForm>
                         )}
                         {row.receiptDate && (
                           <p className="mt-1 text-[11px] text-slate-500">
@@ -241,10 +242,10 @@ export default async function ShopRentPage() {
                         )}
                       </Td>
                       <Td>
-                        <form action={deleteShopCollection}>
+                        <PinProtectedForm action={deleteShopCollection}>
                           <input type="hidden" name="id" value={row.id} />
                           <button className="text-xs font-semibold text-red-600">Delete</button>
-                        </form>
+                        </PinProtectedForm>
                       </Td>
                     </tr>
                   );
@@ -285,7 +286,7 @@ export default async function ShopRentPage() {
                     <Td right>{inr(shop.monthlyRent)}</Td>
                     <Td right>{inr(shop.premiumTotal)}</Td>
                     <Td>
-                      <form action={updateShopStatus} className="flex gap-1">
+                      <PinProtectedForm action={updateShopStatus} className="flex gap-1">
                         <input type="hidden" name="id" value={shop.id} />
                         <select name="status" defaultValue={shop.status} className="rounded border border-slate-300 px-2 py-1 text-xs">
                           <option value="active">active</option>
@@ -293,13 +294,13 @@ export default async function ShopRentPage() {
                           <option value="closed">closed</option>
                         </select>
                         <button className="rounded bg-slate-800 px-2 py-1 text-xs text-white">Set</button>
-                      </form>
+                      </PinProtectedForm>
                     </Td>
                     <Td>
-                      <form action={deleteShop}>
+                      <PinProtectedForm action={deleteShop}>
                         <input type="hidden" name="id" value={shop.id} />
                         <button className="text-xs font-semibold text-red-600">Delete</button>
-                      </form>
+                      </PinProtectedForm>
                     </Td>
                   </tr>
                 ))}

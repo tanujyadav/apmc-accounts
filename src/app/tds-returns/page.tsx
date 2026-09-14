@@ -1,3 +1,4 @@
+import PinProtectedForm from "@/components/PinProtectedForm";
 import { db } from "@/db";
 import { tdsReturns } from "@/db/schema";
 import { desc } from "drizzle-orm";
@@ -169,7 +170,7 @@ export default async function TdsReturnsPage() {
                     <Td right className="text-red-600">{inr(row.interestLateFee)}</Td>
                     <Td>
                       <Badge color={statusColor(row.status)}>{row.status}</Badge>
-                      <form action={updateTdsReturn} className="mt-2 grid min-w-64 grid-cols-2 gap-1">
+                      <PinProtectedForm action={updateTdsReturn} className="mt-2 grid min-w-64 grid-cols-2 gap-1">
                         <input type="hidden" name="id" value={row.id} />
                         <select name="status" defaultValue={row.status} className="rounded border border-slate-300 px-2 py-1 text-xs">
                           <option value="pending">Pending</option>
@@ -180,14 +181,14 @@ export default async function TdsReturnsPage() {
                         <input type="date" name="filingDate" defaultValue={row.filingDate ?? ""} className="rounded border border-slate-300 px-2 py-1 text-xs" />
                         <input name="acknowledgementNo" defaultValue={row.acknowledgementNo ?? ""} placeholder="Acknowledgement" className="rounded border border-slate-300 px-2 py-1 text-xs" />
                         <button className="rounded bg-slate-800 px-2 py-1 text-xs font-semibold text-white">Update</button>
-                      </form>
+                      </PinProtectedForm>
                       {row.filingDate && <p className="mt-1 text-[11px] text-slate-500">Filed {fmtDate(row.filingDate)}</p>}
                     </Td>
                     <Td>
-                      <form action={deleteTdsReturn}>
+                      <PinProtectedForm action={deleteTdsReturn}>
                         <input type="hidden" name="id" value={row.id} />
                         <button className="text-xs font-semibold text-red-600">Delete</button>
-                      </form>
+                      </PinProtectedForm>
                     </Td>
                   </tr>
                 ))}

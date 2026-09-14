@@ -1,3 +1,4 @@
+import PinProtectedForm from "@/components/PinProtectedForm";
 import Link from "next/link";
 import { db } from "@/db";
 import { cashbookEntries, ledgerHeads, revenueTargets } from "@/db/schema";
@@ -115,7 +116,11 @@ export default async function RevenueProgressPage({
 
       <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-3">
         <Card title="Set / Update Revenue Target">
-          <form action={saveRevenueTarget} className="space-y-3">
+          <PinProtectedForm
+            action={saveRevenueTarget}
+            purpose="Revenue target save/update"
+            className="space-y-3"
+          >
             <div>
               <label className={labelCls}>Financial Year</label>
               <input name="financialYear" defaultValue={selectedFY} required className={inputCls} />
@@ -143,7 +148,7 @@ export default async function RevenueProgressPage({
             <p className="text-xs text-slate-400">
               Saving the same financial year and income head updates its existing target.
             </p>
-          </form>
+          </PinProtectedForm>
         </Card>
 
         <Card title={`Monthly Revenue Progress · FY ${selectedFY}`} className="xl:col-span-2">
@@ -229,10 +234,10 @@ export default async function RevenueProgressPage({
                       </Td>
                       <Td>
                         {target && (
-                          <form action={deleteRevenueTarget}>
+                          <PinProtectedForm action={deleteRevenueTarget}>
                             <input type="hidden" name="id" value={target.id} />
                             <button className="text-xs font-semibold text-red-600">Remove Target</button>
-                          </form>
+                          </PinProtectedForm>
                         )}
                       </Td>
                     </tr>
