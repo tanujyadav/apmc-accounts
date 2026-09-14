@@ -31,7 +31,7 @@ jobs:
           set -euo pipefail
           mkdir -p backups
           STAMP=$(date -u +%Y-%m-%d)
-          pg_dump "$DATABASE_URL" --no-owner --no-privileges | gzip > "backups/apmc-backup-$STAMP.sql.gz"
+          /usr/lib/postgresql/18/bin/pg_dump "$DATABASE_URL" --no-owner --no-privileges | gzip > "backups/apmc-backup-$STAMP.sql.gz"
           # Fail loudly instead of committing an empty/near-empty dump.
           SIZE=$(stat -c%s "backups/apmc-backup-$STAMP.sql.gz")
           if [ "$SIZE" -lt 200 ]; then
