@@ -165,6 +165,7 @@ export default async function LedgerPage({
                     <li key={item.id}>
                       <Link
                         href={headHref(item.id)}
+                        prefetch={false}
                         className={`block rounded-lg px-3 py-2 text-sm transition ${
                           item.id === selectedId
                             ? "bg-emerald-600 font-semibold text-white shadow-sm"
@@ -211,6 +212,7 @@ export default async function LedgerPage({
                     <li key={item.id}>
                       <Link
                         href={headHref(item.id)}
+                        prefetch={false}
                         className={`block rounded-lg px-3 py-2 text-sm transition ${
                           item.id === selectedId
                             ? "bg-red-600 font-semibold text-white shadow-sm"
@@ -256,6 +258,7 @@ export default async function LedgerPage({
                       <li key={item.id}>
                         <Link
                           href={headHref(item.id)}
+                          prefetch={false}
                           className={`block rounded-lg px-3 py-2 text-sm transition ${
                             item.id === selectedId
                               ? "bg-blue-600 font-semibold text-white"

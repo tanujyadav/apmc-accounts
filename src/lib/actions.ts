@@ -13,6 +13,7 @@ import {
   cashDepositAllocations,
   budgets,
   bills,
+  billNumberCounters,
   apmcProfile,
   parties,
   shops,
@@ -22,7 +23,7 @@ import {
   tdsReturns,
   revenueTargets,
 } from "@/db/schema";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, ilike, inArray, isNull, or, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { hashSecurityPin, verifySecurityPin } from "@/lib/security";
@@ -166,23 +167,7 @@ export async function addLedgerHead(fd: FormData) {
   revalidatePath("/", "layout");
 }
 
-export async function updateLedgerHead(fd: FormData) {
-  await requireSecurityPin(fd);
-  const id = i(fd, "id");
-  const name = s(fd, "name");
-  if (!id || !name) return;
-  await db
-    .update(ledgerHeads)
-    .set({
-      code: s(fd, "code") || "GEN",
-      name,
-      nameHindi: s(fd, "nameHindi") || null,
-      type: s(fd, "type") || "expense",
-    })
-    .where(eq(ledgerHeads.id, id));
-  revalidatePath("/", "layout");
-  redirect("/settings");
-}
+// Existing ledger heads are locked master data. No update action is exposed.
 
 // ---------- Bank Accounts ----------
 export async function addBankAccount(fd: FormData) {
@@ -247,7 +232,19 @@ export async function addCashbookEntry(fd: FormData) {
 
 export async function deleteCashbookEntry(fd: FormData) {
   await requireSecurityPin(fd);
-  await db.delete(cashbookEntries).where(eq(cashbookEntries.id, i(fd, "id")));
+  const id = i(fd, "id");
+  if (!id) return;
+  const [linkedBill] = await db
+    .select({ id: bills.id })
+    .from(bills)
+    .where(eq(bills.postedCashbookEntryId, id))
+    .limit(1);
+  if (linkedBill) {
+    // Bill-posted entries can only be reversed by deleting the source Bill.
+    revalidatePath("/cashbook");
+    return;
+  }
+  await db.delete(cashbookEntries).where(eq(cashbookEntries.id, id));
   revalidatePath("/", "layout");
 }
 
@@ -472,27 +469,8 @@ export async function saveBrsStatement(fd: FormData) {
   redirect(`/brs?month=${encodeURIComponent(statementMonth)}&saved=1`);
 }
 
-export async function reconcileEntry(fd: FormData) {
-  await requireSecurityPin(fd);
-  const id = i(fd, "id");
-  await db
-    .update(cashbookEntries)
-    .set({
-      reconciled: true,
-      reconciledDate: s(fd, "reconciledDate") || new Date().toISOString().slice(0, 10),
-    })
-    .where(eq(cashbookEntries.id, id));
-  revalidatePath("/brs");
-}
-
-export async function unreconcileEntry(fd: FormData) {
-  await requireSecurityPin(fd);
-  await db
-    .update(cashbookEntries)
-    .set({ reconciled: false, reconciledDate: null })
-    .where(eq(cashbookEntries.id, i(fd, "id")));
-  revalidatePath("/brs");
-}
+// BRS uncleared status is sourced only from the Cheque Register. There are no
+// manual Cashbook reconcile/unreconcile actions.
 
 // ---------- Cheques ----------
 export async function addCheque(fd: FormData) {
@@ -510,6 +488,7 @@ export async function addCheque(fd: FormData) {
     remarks: s(fd, "remarks") || null,
   });
   revalidatePath("/cheques");
+  revalidatePath("/brs");
 }
 
 export async function updateChequeStatus(fd: FormData) {
@@ -757,45 +736,363 @@ export async function deleteCashDeposit(fd: FormData) {
 
 // ---------- Budgets ----------
 export async function addBudget(fd: FormData) {
+  await requireSecurityPin(fd);
   const ledgerHeadId = i(fd, "ledgerHeadId");
-  if (!ledgerHeadId) return;
-  await db.insert(budgets).values({
-    financialYear: s(fd, "financialYear"),
-    ledgerHeadId,
-    allocatedAmount: n(fd, "allocatedAmount"),
+  const financialYear = s(fd, "financialYear");
+  if (!ledgerHeadId || !financialYear) return;
+
+  const [head] = await db
+    .select({ type: ledgerHeads.type })
+    .from(ledgerHeads)
+    .where(eq(ledgerHeads.id, ledgerHeadId))
+    .limit(1);
+  if (!head || head.type !== "expense") {
+    throw new Error("Budget can be set only for an Expense Head");
+  }
+
+  const mainBudget = Number(n(fd, "mainBudget"));
+  const supplementaryBudget = Number(n(fd, "supplementaryBudget"));
+  const values = {
+    mainBudget: mainBudget.toFixed(2),
+    supplementaryBudget: supplementaryBudget.toFixed(2),
+    allocatedAmount: (mainBudget + supplementaryBudget).toFixed(2),
     remarks: s(fd, "remarks") || null,
-  });
+  };
+  const [existing] = await db
+    .select({ id: budgets.id })
+    .from(budgets)
+    .where(
+      and(
+        eq(budgets.financialYear, financialYear),
+        eq(budgets.ledgerHeadId, ledgerHeadId),
+      ),
+    )
+    .limit(1);
+
+  if (existing) {
+    await db.update(budgets).set(values).where(eq(budgets.id, existing.id));
+  } else {
+    await db.insert(budgets).values({
+      financialYear,
+      ledgerHeadId,
+      ...values,
+    });
+  }
   revalidatePath("/bills-budget");
 }
 
 // ---------- Bills ----------
 export async function addBill(fd: FormData) {
-  const billNo = s(fd, "billNo");
-  if (!billNo) return;
-  await db.insert(bills).values({
-    billNo,
-    billDate: s(fd, "billDate") || new Date().toISOString().slice(0, 10),
-    vendorName: s(fd, "vendorName"),
-    description: s(fd, "description"),
-    ledgerHeadId: i(fd, "ledgerHeadId"),
-    financialYear: s(fd, "financialYear"),
-    amount: n(fd, "amount"),
+  const ledgerHeadId = i(fd, "ledgerHeadId");
+  const financialYear = s(fd, "financialYear");
+  const billDate =
+    s(fd, "billDate") || new Date().toISOString().slice(0, 10);
+  if (!ledgerHeadId || !/^\d{4}-\d{2}$/.test(financialYear)) return;
+
+  const grossAmount = Number(n(fd, "amount"));
+  const deductionAmount = Number(n(fd, "deductionAmount"));
+  const netAmount = grossAmount - deductionAmount;
+  const chequeNo = s(fd, "chequeNo");
+  const chequeDate = s(fd, "chequeDate");
+  const deductionChequeNo = s(fd, "deductionChequeNo");
+  const deductionChequeDate = s(fd, "deductionChequeDate");
+  if (
+    grossAmount <= 0 ||
+    deductionAmount < 0 ||
+    netAmount <= 0 ||
+    !chequeNo ||
+    !chequeDate
+  ) {
+    throw new Error("Gross, Net cheque number and cheque date are required");
+  }
+  if (deductionAmount > 0 && (!deductionChequeNo || !deductionChequeDate)) {
+    throw new Error("Deduction cheque number and date are required");
+  }
+
+  await db.transaction(async (tx) => {
+    const [[head], [fixedBank]] = await Promise.all([
+      tx
+        .select({ type: ledgerHeads.type })
+        .from(ledgerHeads)
+        .where(eq(ledgerHeads.id, ledgerHeadId))
+        .limit(1),
+      tx
+        .select({ id: bankAccounts.id })
+        .from(bankAccounts)
+        .where(
+          and(
+            eq(bankAccounts.accountNumber, "30386343784"),
+            eq(bankAccounts.status, "active"),
+          ),
+        )
+        .limit(1),
+    ]);
+    if (!head || head.type !== "expense") {
+      throw new Error("Bill can be entered only under an Expense Head");
+    }
+    if (!fixedBank) {
+      throw new Error(
+        "Active SBI APMC PAYMENT account 30386343784 is required",
+      );
+    }
+
+    const [counter] = await tx
+      .insert(billNumberCounters)
+      .values({ financialYear, lastSerial: 1, updatedAt: new Date() })
+      .onConflictDoUpdate({
+        target: billNumberCounters.financialYear,
+        set: {
+          lastSerial: sql`${billNumberCounters.lastSerial} + 1`,
+          updatedAt: new Date(),
+        },
+      })
+      .returning({ lastSerial: billNumberCounters.lastSerial });
+    const monthNumber = Number(billDate.slice(5, 7));
+    const monthNames = [
+      "JANUARY",
+      "FEBRUARY",
+      "MARCH",
+      "APRIL",
+      "MAY",
+      "JUNE",
+      "JULY",
+      "AUGUST",
+      "SEPTEMBER",
+      "OCTOBER",
+      "NOVEMBER",
+      "DECEMBER",
+    ];
+    const monthName = monthNames[monthNumber - 1];
+    if (!monthName) throw new Error("Bill Date is invalid");
+    const billNo = `FY${financialYear.slice(0, 4)}/${monthName}/${
+      counter.lastSerial
+    }`;
+
+    await tx.insert(bills).values({
+      billNo,
+      billDate,
+      vendorName: s(fd, "vendorName"),
+      description: s(fd, "description"),
+      ledgerHeadId,
+      financialYear,
+      subVoucherNo: null,
+      authorityDetails: null,
+      chequeDetails: null,
+      paymentMode: "cheque",
+      bankAccountId: fixedBank.id,
+      chequeNo,
+      chequeDate,
+      deductionChequeNo: deductionAmount > 0 ? deductionChequeNo : null,
+      deductionChequeDate:
+        deductionAmount > 0 ? deductionChequeDate : null,
+      amount: grossAmount.toFixed(2),
+      deductionAmount: deductionAmount.toFixed(2),
+      netAmount: netAmount.toFixed(2),
+      status: "draft",
+    });
   });
   revalidatePath("/bills-budget");
+  redirect(`/bills-budget?fy=${encodeURIComponent(financialYear)}&draftSaved=1`);
 }
 
-export async function updateBillStatus(fd: FormData) {
+export async function finalApproveBill(fd: FormData) {
   await requireSecurityPin(fd);
-  const status = s(fd, "status");
-  await db
-    .update(bills)
-    .set({
-      status,
-      paymentDate:
-        status === "paid" ? new Date().toISOString().slice(0, 10) : null,
-    })
-    .where(eq(bills.id, i(fd, "id")));
-  revalidatePath("/bills-budget");
+  const id = i(fd, "id");
+  const returnFinancialYear = s(fd, "returnFinancialYear");
+  if (!id) return;
+
+  await db.transaction(async (tx) => {
+    const [bill] = await tx
+      .select()
+      .from(bills)
+      .where(eq(bills.id, id))
+      .limit(1);
+    if (!bill) throw new Error("Bill not found");
+    if (bill.postedCashbookEntryId || bill.status === "approved") {
+      throw new Error("Bill is already finally approved and posted");
+    }
+    if (bill.status !== "draft" && bill.status !== "pending") {
+      throw new Error("Only a Draft Bill can be finally approved");
+    }
+
+    const [head] = await tx
+      .select({ type: ledgerHeads.type })
+      .from(ledgerHeads)
+      .where(eq(ledgerHeads.id, bill.ledgerHeadId))
+      .limit(1);
+    if (!head || head.type !== "expense") {
+      throw new Error("Bill Expense Head is invalid");
+    }
+    const [fixedBank] = await tx
+      .select({ id: bankAccounts.id })
+      .from(bankAccounts)
+      .where(
+        and(
+          eq(bankAccounts.accountNumber, "30386343784"),
+          eq(bankAccounts.status, "active"),
+        ),
+      )
+      .limit(1);
+    if (!fixedBank) {
+      throw new Error("Active SBI APMC PAYMENT account 30386343784 is required");
+    }
+
+    const grossAmount = Number(bill.amount);
+    const deductionAmount = Number(bill.deductionAmount);
+    const netAmount = Number(bill.netAmount) || grossAmount - deductionAmount;
+    if (grossAmount <= 0 || netAmount <= 0) {
+      throw new Error("Bill Gross and Net amounts must be positive");
+    }
+    if (!bill.chequeNo || !bill.chequeDate) {
+      throw new Error("Net payment cheque number and date are required");
+    }
+    if (
+      deductionAmount > 0 &&
+      (!bill.deductionChequeNo || !bill.deductionChequeDate)
+    ) {
+      throw new Error("Deduction cheque number and date are required");
+    }
+
+    const approvalDate = new Date().toISOString().slice(0, 10);
+    const cashbookChequeDetails = deductionAmount > 0
+      ? `Net Chq ${bill.chequeNo}; Deduction Chq ${bill.deductionChequeNo}`
+      : `Net Chq ${bill.chequeNo}`;
+    const [postedEntry] = await tx
+      .insert(cashbookEntries)
+      .values({
+        entryDate: approvalDate,
+        voucherNo: bill.billNo,
+        entryType: "payment",
+        mode: "cheque",
+        ledgerHeadId: bill.ledgerHeadId,
+        bankAccountId: fixedBank.id,
+        chequeNo: cashbookChequeDetails,
+        partyName: bill.vendorName,
+        particulars: `Bill: ${bill.description} | Gross ₹${grossAmount.toFixed(
+          2,
+        )} | Net Chq ₹${netAmount.toFixed(2)} | Deduction Chq ₹${deductionAmount.toFixed(
+          2,
+        )}`,
+        amount: grossAmount.toFixed(2),
+      })
+      .returning({ id: cashbookEntries.id });
+
+    const issuedCheques: Array<typeof cheques.$inferInsert> = [
+      {
+        chequeNo: bill.chequeNo,
+        chequeDate: bill.chequeDate,
+        bankAccountId: fixedBank.id,
+        partyName: `${bill.vendorName} — Net Payment`,
+        amount: netAmount.toFixed(2),
+        direction: "issued",
+        status: "pending",
+        sourceBillId: bill.id,
+        remarks: `Net payment auto-posted from Bill ${bill.billNo}`,
+      },
+    ];
+    if (
+      deductionAmount > 0 &&
+      bill.deductionChequeNo &&
+      bill.deductionChequeDate
+    ) {
+      issuedCheques.push({
+        chequeNo: bill.deductionChequeNo,
+        chequeDate: bill.deductionChequeDate,
+        bankAccountId: fixedBank.id,
+        partyName: `${bill.vendorName} — Deduction`,
+        amount: deductionAmount.toFixed(2),
+        direction: "issued",
+        status: "pending",
+        sourceBillId: bill.id,
+        remarks: `Deduction auto-posted from Bill ${bill.billNo}`,
+      });
+    }
+    await tx.insert(cheques).values(issuedCheques);
+
+    await tx
+      .update(bills)
+      .set({
+        status: "approved",
+        paymentMode: "cheque",
+        bankAccountId: fixedBank.id,
+        paymentDate: approvalDate,
+        postedCashbookEntryId: postedEntry.id,
+      })
+      .where(eq(bills.id, id));
+  });
+
+  revalidatePath("/", "layout");
+  redirect(
+    returnFinancialYear
+      ? `/bills-budget?fy=${encodeURIComponent(returnFinancialYear)}&approved=1`
+      : "/bills-budget?approved=1",
+  );
+}
+
+export async function deleteBill(fd: FormData) {
+  await requireSecurityPin(fd);
+  const id = i(fd, "id");
+  const returnFinancialYear = s(fd, "returnFinancialYear");
+  if (!id) return;
+
+  let deleted = false;
+  try {
+    await db.transaction(async (tx) => {
+      const [bill] = await tx
+        .select()
+        .from(bills)
+        .where(eq(bills.id, id))
+        .limit(1);
+      if (!bill) throw new Error("Bill not found");
+
+      await tx.delete(cheques).where(eq(cheques.sourceBillId, bill.id));
+      const legacyChequeNumbers = [bill.chequeNo, bill.deductionChequeNo].filter(
+        (value): value is string => Boolean(value),
+      );
+      if (legacyChequeNumbers.length > 0 && bill.bankAccountId) {
+        await tx
+          .delete(cheques)
+          .where(
+            and(
+              isNull(cheques.sourceBillId),
+              eq(cheques.direction, "issued"),
+              eq(cheques.bankAccountId, bill.bankAccountId),
+              inArray(cheques.chequeNo, legacyChequeNumbers),
+              or(
+                ilike(cheques.remarks, `%Bill ${bill.billNo}%`),
+                ilike(cheques.remarks, `%Bill ${bill.id}%`),
+              ),
+            ),
+          );
+      }
+      const postedEntryId = bill.postedCashbookEntryId;
+      if (postedEntryId) {
+        await tx
+          .update(bills)
+          .set({ postedCashbookEntryId: null })
+          .where(eq(bills.id, bill.id));
+        await tx
+          .delete(cashbookEntries)
+          .where(eq(cashbookEntries.id, postedEntryId));
+      }
+      const result = await tx
+        .delete(bills)
+        .where(eq(bills.id, bill.id))
+        .returning({ id: bills.id });
+      deleted = result.length === 1;
+    });
+  } catch {
+    deleted = false;
+  }
+
+  revalidatePath("/", "layout");
+  redirect(
+    returnFinancialYear
+      ? `/bills-budget?fy=${encodeURIComponent(returnFinancialYear)}&billDeleted=${
+          deleted ? "1" : "0"
+        }`
+      : `/bills-budget?billDeleted=${deleted ? "1" : "0"}`,
+  );
 }
 
 // ---------- Shop Rent & Premium ----------

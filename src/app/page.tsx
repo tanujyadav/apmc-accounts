@@ -7,9 +7,9 @@ import {
   cheques,
   bills,
   ledgerHeads,
-  apmcProfile,
 } from "@/db/schema";
 import { inr, num, currentFY } from "@/lib/format";
+import { getApmcProfile } from "@/lib/profile";
 import { StatCard } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
@@ -50,16 +50,15 @@ export default async function DashboardPage({
     ? requestedMonth
     : currentMonth;
 
-  const [entries, banks, deposits, chq, billRows, heads, profiles] = await Promise.all([
+  const [entries, banks, deposits, chq, billRows, heads, profile] = await Promise.all([
     db.select().from(cashbookEntries),
     db.select().from(bankAccounts),
     db.select().from(cashDeposits),
     db.select().from(cheques),
     db.select().from(bills),
     db.select().from(ledgerHeads),
-    db.select().from(apmcProfile).limit(1),
+    getApmcProfile(),
   ]);
-  const profile = profiles[0];
 
   const headMap = new Map(heads.map((h) => [h.id, h]));
 
@@ -97,7 +96,9 @@ export default async function DashboardPage({
 
   const pendingCheques = chq.filter((c) => c.status === "pending");
   const pendingBills = billRows.filter(
-    (b) => b.status === "pending" || b.status === "approved",
+    (bill) =>
+      (bill.status === "draft" || bill.status === "pending") &&
+      !bill.postedCashbookEntryId,
   );
   const monthlyIncomeByCode = new Map<string, number>();
   for (const entry of entries) {

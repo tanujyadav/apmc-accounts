@@ -14,7 +14,6 @@ import {
   togglePartyStatus,
   deleteParty,
   addLedgerHead,
-  updateLedgerHead,
   changeSecurityPin,
   setupInitialCashbookOpeningBalance,
 } from "@/lib/actions";
@@ -39,13 +38,12 @@ export default async function SettingsPage({
   searchParams,
 }: {
   searchParams: Promise<{
-    editHead?: string;
     headDelete?: string;
     pinChanged?: string;
     openingSetup?: string;
   }>;
 }) {
-  const { editHead, headDelete, pinChanged, openingSetup } = await searchParams;
+  const { headDelete, pinChanged, openingSetup } = await searchParams;
   const [profiles, partyRows, heads, openingRows] = await Promise.all([
     db.select().from(apmcProfile).limit(1),
     db.select().from(parties).orderBy(asc(parties.name)),
@@ -62,8 +60,6 @@ export default async function SettingsPage({
   const setupStartYear = Number(setupFinancialYear.slice(0, 4));
   const setupPeriodStart = `${setupStartYear}-04-01`;
   const setupPeriodEnd = `${setupStartYear + 1}-03-31`;
-  const editHeadId = editHead ? parseInt(editHead, 10) : null;
-  const headBeingEdited = editHeadId ? heads.find((h) => h.id === editHeadId) : undefined;
 
   return (
     <div>
@@ -489,36 +485,16 @@ export default async function SettingsPage({
 
       {/* ---------- Income / Expense Head Master ---------- */}
       <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-3">
-        <Card
-          title={
-            headBeingEdited
-              ? `✏️ Edit Head: ${headBeingEdited.name}`
-              : "Add Income / Expense Head"
-          }
-        >
-          <PinProtectedForm
-            key={headBeingEdited?.id ?? "new"}
-            action={headBeingEdited ? updateLedgerHead : addLedgerHead}
-            enabled={Boolean(headBeingEdited)}
-            purpose="Income/Expense Head update"
-            className="space-y-3"
-          >
-            {headBeingEdited && (
-              <input type="hidden" name="id" value={headBeingEdited.id} />
-            )}
+        <Card title="Add Income / Expense Head">
+          <form action={addLedgerHead} className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className={labelCls}>Code</label>
-                <input
-                  name="code"
-                  placeholder="INC-08"
-                  defaultValue={headBeingEdited?.code ?? ""}
-                  className={inputCls}
-                />
+                <input name="code" placeholder="INC-08" className={inputCls} />
               </div>
               <div>
                 <label className={labelCls}>Type</label>
-                <select name="type" defaultValue={headBeingEdited?.type ?? "income"} className={inputCls}>
+                <select name="type" defaultValue="income" className={inputCls}>
                   <option value="income">Income (आय)</option>
                   <option value="expense">Expense (व्यय)</option>
                   <option value="asset">Asset</option>
@@ -531,27 +507,15 @@ export default async function SettingsPage({
               hindiLabel="शीर्ष नाम (हिन्दी) — स्वतः"
               placeholder="e.g. Parking Fee"
               required
-              defaultName={headBeingEdited?.name ?? ""}
-              defaultHindi={headBeingEdited?.nameHindi ?? ""}
             />
-            <div className="flex gap-2">
-              <button className={btnCls + " flex-1"}>
-                {headBeingEdited ? "💾 Update Head" : "Add Head"}
-              </button>
-              {headBeingEdited && (
-                <Link
-                  href="/settings"
-                  className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50"
-                >
-                  Cancel
-                </Link>
-              )}
+            <button className={btnCls + " w-full"}>Add New Head</button>
+            <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+              Existing Income/Expense Heads locked हैं और edit नहीं किए जा सकते। Operational Data Reset में Head Master सुरक्षित रहता है।
             </div>
             <p className="text-xs text-amber-700">
-              Warning: deleting a head also permanently deletes every cashbook entry,
-              bill and budget assigned to it.
+              Warning: manual delete करने पर linked Cashbook entries, bills और budgets भी delete होंगे।
             </p>
-          </PinProtectedForm>
+          </form>
         </Card>
 
         <Card title={`Income & Expense Head Master (${heads.length})`} className="xl:col-span-2">
@@ -569,23 +533,16 @@ export default async function SettingsPage({
               <tbody>
                 {heads.length === 0 && <EmptyRow colSpan={5} message="No heads defined yet." />}
                 {heads.map((h) => (
-                  <tr
-                    key={h.id}
-                    className={h.id === editHeadId ? "bg-emerald-50" : "hover:bg-slate-50"}
-                  >
+                  <tr key={h.id} className="hover:bg-slate-50">
                     <Td className="font-mono text-xs">{h.code}</Td>
                     <Td className="font-semibold">{h.name}</Td>
                     <Td className="text-emerald-700">{h.nameHindi ?? "-"}</Td>
                     <Td><Badge color={headColor(h.type)}>{h.type}</Badge></Td>
                     <Td>
                       <div className="flex items-center gap-3">
-                        <Link
-                          href={`/settings?editHead=${h.id}`}
-                          className="text-xs font-semibold text-blue-600 hover:text-blue-800"
-                          title="Edit head"
-                        >
-                          ✏️ Edit
-                        </Link>
+                        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold text-slate-500">
+                          🔒 Edit Locked
+                        </span>
                         <DeleteHeadButton id={h.id} name={`${h.code} — ${h.name}`} />
                       </div>
                     </Td>

@@ -1,5 +1,13 @@
 @import "tailwindcss";
 
+/* Official print typography. Aparajita is used when installed (standard on many
+   Windows office systems); Hindi-safe serif fallbacks keep PDFs readable. */
+.aparajita-print,
+.aparajita-print * {
+  font-family: "Aparajita", "Nirmala UI", "Noto Serif Devanagari", serif !important;
+  letter-spacing: normal;
+}
+
 /* ---------- Print styles for voucher / slip printing ---------- */
 @media print {
   aside {
@@ -18,6 +26,26 @@
   .print-area {
     box-shadow: none !important;
     border: 2px solid #1e293b !important;
+    print-color-adjust: exact !important;
+    -webkit-print-color-adjust: exact !important;
+  }
+  .report-section {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .report-section table {
+    break-inside: auto;
+    page-break-inside: auto;
+  }
+  .report-section thead {
+    display: table-header-group;
+  }
+  .report-section tfoot {
+    display: table-footer-group;
+  }
+  .report-row {
+    break-inside: avoid;
+    page-break-inside: avoid;
   }
   @page {
     size: A4;

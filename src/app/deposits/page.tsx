@@ -333,6 +333,7 @@ export default async function DepositsPage({
                       {group.pendingAmount > 0 ? (
                         <Link
                           href={`/deposits?pendingAccount=${group.accountNumber}#pending-details`}
+                          prefetch={false}
                           className="whitespace-nowrap rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700"
                         >
                           View Linked Details →

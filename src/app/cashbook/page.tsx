@@ -2,6 +2,7 @@ import PinProtectedForm from "@/components/PinProtectedForm";
 import { db } from "@/db";
 import {
   bankAccounts,
+  bills,
   cashbookEntries,
   cashbookOpeningBalances,
   cashDepositAllocations,
@@ -42,6 +43,7 @@ export default async function CashbookPage({
     openingRows,
     depositRows,
     depositAllocations,
+    postedBillRows,
   ] = await Promise.all([
     db
       .select()
@@ -63,6 +65,13 @@ export default async function CashbookPage({
       .limit(1),
     db.select().from(cashDeposits),
     db.select().from(cashDepositAllocations),
+    db
+      .select({
+        id: bills.id,
+        billNo: bills.billNo,
+        postedCashbookEntryId: bills.postedCashbookEntryId,
+      })
+      .from(bills),
   ]);
   const openingBalance = openingRows[0];
   const openingDate = openingBalance?.openingDate || periodStart;
@@ -98,6 +107,13 @@ export default async function CashbookPage({
   );
 
   const headMap = new Map(heads.map((head) => [head.id, head]));
+  const billByCashbookEntry = new Map(
+    postedBillRows.flatMap((bill) =>
+      bill.postedCashbookEntryId
+        ? [[bill.postedCashbookEntryId, bill] as const]
+        : [],
+    ),
+  );
   const bankMap = new Map(banks.map((bank) => [bank.id, bank]));
   const depositMap = new Map(depositRows.map((deposit) => [deposit.id, deposit]));
   const allocationsByReceipt = new Map<number, typeof depositAllocations>();
@@ -154,6 +170,8 @@ export default async function CashbookPage({
     .reduce((sum, entry) => sum + num(entry.amount), 0);
   const debitPayments = cashPayments + bankPayments;
   const totalCredit = directCash + directBank;
+  // Cash-to-bank deposits are internal contra transfers, so they are excluded
+  // from inflow/outflow totals to avoid counting the same receipt twice.
   const carryCashReceipts = carryForwardEntries
     .filter((entry) => entry.entryType === "receipt" && entry.mode === "cash")
     .reduce((sum, entry) => sum + num(entry.amount), 0);
@@ -327,6 +345,57 @@ export default async function CashbookPage({
         />
       </div>
 
+      <section className="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 px-5 py-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-slate-100 text-xl text-slate-700">
+              ⇄
+            </div>
+            <div>
+              <h2 className="text-base font-bold uppercase tracking-wide text-slate-800">
+                Inflow vs Outflow
+              </h2>
+              <p className="text-sm text-slate-500">कुल प्राप्ति एवं भुगतान</p>
+            </div>
+          </div>
+          <span className="rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-600">
+            {hasDateFilter && !invalidDateRange
+              ? `${fmtDate(rangeStart)} से ${fmtDate(rangeEnd)}`
+              : `FY ${selectedFY}`}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 p-5 sm:grid-cols-2">
+          <div className="flex items-center justify-between gap-4 rounded-xl border border-emerald-200 bg-emerald-50 px-5 py-4">
+            <div>
+              <p className="font-bold text-emerald-800">↙ कुल प्राप्ति (+)</p>
+              <p className="mt-0.5 text-xs text-emerald-700/70">
+                Cash + Bank Receipts
+              </p>
+            </div>
+            <p className="whitespace-nowrap text-xl font-bold tabular-nums text-emerald-800">
+              {inr(totalCredit)}
+            </p>
+          </div>
+
+          <div className="flex items-center justify-between gap-4 rounded-xl border border-red-200 bg-red-50 px-5 py-4">
+            <div>
+              <p className="font-bold text-red-700">↗ कुल भुगतान (−)</p>
+              <p className="mt-0.5 text-xs text-red-700/70">
+                Cash + Bank Payments
+              </p>
+            </div>
+            <p className="whitespace-nowrap text-xl font-bold tabular-nums text-red-700">
+              {inr(debitPayments)}
+            </p>
+          </div>
+        </div>
+
+        <p className="border-t border-slate-100 px-5 py-2.5 text-right text-[11px] text-slate-400">
+          Cash-to-Bank deposits are internal transfers and are not counted again.
+        </p>
+      </section>
+
       <div className="mt-6">
         <Card title="New Cashbook Entry / नई रोकड़बही प्रविष्टि">
           <CashbookEntryForms
@@ -495,6 +564,7 @@ export default async function CashbookPage({
                   const isDirectCash = isReceipt && entry.mode === "cash";
                   const isDirectBank = isReceipt && entry.mode !== "cash";
                   const receiptAllocations = allocationsByReceipt.get(entry.id) ?? [];
+                  const sourceBill = billByCashbookEntry.get(entry.id);
 
                   return (
                     <tr
@@ -576,15 +646,24 @@ export default async function CashbookPage({
                           >
                             🖨️ Print
                           </a>
-                          <PinProtectedForm action={deleteCashbookEntry}>
-                            <input type="hidden" name="id" value={entry.id} />
-                            <button
-                              className="text-xs font-semibold text-red-500 hover:text-red-700"
-                              title="Delete entry"
+                          {sourceBill ? (
+                            <span
+                              className="whitespace-nowrap rounded-full bg-blue-100 px-2.5 py-1 text-[10px] font-semibold text-blue-700"
+                              title={`Posted from Bill ${sourceBill.billNo}. Delete the source Bill to reverse this entry.`}
                             >
-                              Delete
-                            </button>
-                          </PinProtectedForm>
+                              🔒 Bill Posted
+                            </span>
+                          ) : (
+                            <PinProtectedForm action={deleteCashbookEntry}>
+                              <input type="hidden" name="id" value={entry.id} />
+                              <button
+                                className="text-xs font-semibold text-red-500 hover:text-red-700"
+                                title="Delete entry"
+                              >
+                                Delete
+                              </button>
+                            </PinProtectedForm>
+                          )}
                         </div>
                       </td>
                     </tr>

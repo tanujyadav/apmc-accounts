@@ -1,7 +1,7 @@
 import PinProtectedForm from "@/components/PinProtectedForm";
 import { db } from "@/db";
 import { cheques, bankAccounts, parties } from "@/db/schema";
-import { desc, asc } from "drizzle-orm";
+import { and, desc, asc, gte, lte } from "drizzle-orm";
 import { addCheque, updateChequeStatus } from "@/lib/actions";
 import { inr, num, fmtDate, todayISO } from "@/lib/format";
 import {
@@ -19,23 +19,32 @@ export default async function ChequesPage({
   searchParams: Promise<{ from?: string; to?: string }>;
 }) {
   const { from, to } = await searchParams;
-  const [allRows, banks, partyRows] = await Promise.all([
-    db.select().from(cheques).orderBy(desc(cheques.chequeDate), desc(cheques.id)),
-    db.select().from(bankAccounts).orderBy(asc(bankAccounts.bankName)),
-    db.select().from(parties).orderBy(asc(parties.name)),
-  ]);
-  const bankMap = new Map(banks.map((b) => [b.id, b.bankName]));
   const validFrom = /^\d{4}-\d{2}-\d{2}$/.test(from ?? "") ? from! : null;
   const validTo = /^\d{4}-\d{2}-\d{2}$/.test(to ?? "") ? to! : null;
   const hasDateFilter = Boolean(validFrom || validTo);
   const invalidDateRange = Boolean(validFrom && validTo && validFrom > validTo);
-  const rows = invalidDateRange
-    ? allRows
-    : allRows.filter(
-        (cheque) =>
-          (!validFrom || cheque.chequeDate >= validFrom) &&
-          (!validTo || cheque.chequeDate <= validTo),
-      );
+  const dateConditions = [];
+  if (!invalidDateRange && validFrom) {
+    dateConditions.push(gte(cheques.chequeDate, validFrom));
+  }
+  if (!invalidDateRange && validTo) {
+    dateConditions.push(lte(cheques.chequeDate, validTo));
+  }
+  const [rows, banks, partyRows] = await Promise.all([
+    dateConditions.length
+      ? db
+          .select()
+          .from(cheques)
+          .where(and(...dateConditions))
+          .orderBy(desc(cheques.chequeDate), desc(cheques.id))
+      : db
+          .select()
+          .from(cheques)
+          .orderBy(desc(cheques.chequeDate), desc(cheques.id)),
+    db.select().from(bankAccounts).orderBy(asc(bankAccounts.bankName)),
+    db.select().from(parties).orderBy(asc(parties.name)),
+  ]);
+  const bankMap = new Map(banks.map((b) => [b.id, b.bankName]));
 
   const issued = rows.filter((c) => c.direction === "issued");
   const received = rows.filter((c) => c.direction === "received");

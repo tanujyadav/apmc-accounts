@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { asc } from "drizzle-orm";
+import { asc, eq, isNotNull } from "drizzle-orm";
 import { db } from "@/db";
 import { cashbookEntries, ledgerHeads, parties } from "@/db/schema";
 import {
@@ -23,19 +23,19 @@ export default async function PartyLedgerPage({
   searchParams: Promise<{ party?: string; from?: string; to?: string }>;
 }) {
   const { party, from, to } = await searchParams;
-  const [entries, heads, directory] = await Promise.all([
-    db
-      .select()
-      .from(cashbookEntries)
-      .orderBy(asc(cashbookEntries.entryDate), asc(cashbookEntries.id)),
+  const [heads, directory, transactionParties] = await Promise.all([
     db.select().from(ledgerHeads),
     db.select().from(parties).orderBy(asc(parties.name)),
+    db
+      .selectDistinct({ partyName: cashbookEntries.partyName })
+      .from(cashbookEntries)
+      .where(isNotNull(cashbookEntries.partyName)),
   ]);
   const headMap = new Map(heads.map((head) => [head.id, head]));
   const partyNames = [
     ...new Set([
       ...directory.map((item) => item.name),
-      ...entries
+      ...transactionParties
         .map((entry) => entry.partyName?.trim())
         .filter((name): name is string => Boolean(name)),
     ]),
@@ -44,7 +44,11 @@ export default async function PartyLedgerPage({
     ? party!
     : partyNames[0];
   const allPartyEntries = selectedParty
-    ? entries.filter((entry) => entry.partyName?.trim() === selectedParty)
+    ? await db
+        .select()
+        .from(cashbookEntries)
+        .where(eq(cashbookEntries.partyName, selectedParty))
+        .orderBy(asc(cashbookEntries.entryDate), asc(cashbookEntries.id))
     : [];
   const validFrom = /^\d{4}-\d{2}-\d{2}$/.test(from ?? "") ? from! : null;
   const validTo = /^\d{4}-\d{2}-\d{2}$/.test(to ?? "") ? to! : null;
@@ -180,6 +184,7 @@ export default async function PartyLedgerPage({
                 <Link
                   key={name}
                   href={partyHref(name)}
+                  prefetch={false}
                   className={`block rounded-lg px-3 py-2.5 text-sm transition ${
                     name === selectedParty
                       ? "bg-blue-600 font-semibold text-white shadow-sm"

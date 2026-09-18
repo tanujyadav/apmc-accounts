@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { and, asc, eq, isNull, ne } from "drizzle-orm";
+import { and, asc, eq, gte, isNull, lte, ne } from "drizzle-orm";
 import { db } from "@/db";
 import {
   bankAccounts,
@@ -11,7 +11,6 @@ import {
 } from "@/db/schema";
 import BrsStatementForm from "@/components/BrsStatementForm";
 import BrsLiveSync from "@/components/BrsLiveSync";
-import PinProtectedForm from "@/components/PinProtectedForm";
 import {
   Badge,
   Card,
@@ -23,7 +22,6 @@ import {
   inputCls,
   labelCls,
 } from "@/components/ui";
-import { reconcileEntry, unreconcileEntry } from "@/lib/actions";
 import {
   financialYearForDate,
   fmtDate,
@@ -76,15 +74,33 @@ export default async function BRSPage({
     db
       .select()
       .from(cashbookEntries)
-      .where(ne(cashbookEntries.mode, "cash"))
+      .where(
+        and(
+          ne(cashbookEntries.mode, "cash"),
+          gte(cashbookEntries.entryDate, financialYearStart),
+          lte(cashbookEntries.entryDate, periodEnd),
+        ),
+      )
       .orderBy(asc(cashbookEntries.entryDate), asc(cashbookEntries.id)),
     db
       .select()
       .from(cashDeposits)
+      .where(
+        and(
+          gte(cashDeposits.depositDate, financialYearStart),
+          lte(cashDeposits.depositDate, periodEnd),
+        ),
+      )
       .orderBy(asc(cashDeposits.depositDate), asc(cashDeposits.id)),
     db
       .select()
       .from(cheques)
+      .where(
+        and(
+          gte(cheques.chequeDate, financialYearStart),
+          lte(cheques.chequeDate, periodEnd),
+        ),
+      )
       .orderBy(asc(cheques.chequeDate), asc(cheques.id)),
     db
       .select()
@@ -130,33 +146,45 @@ export default async function BRSPage({
     0,
   );
 
-  const notClearedByMonthEnd = (entry: (typeof allBankEntries)[number]) =>
-    !entry.reconciled ||
-    !entry.reconciledDate ||
-    entry.reconciledDate > periodEnd;
+  const isUnclearedAtMonthEnd = (cheque: (typeof chequeRows)[number]) =>
+    cheque.status === "pending" ||
+    (cheque.status === "cleared" &&
+      Boolean(cheque.clearedDate) &&
+      cheque.clearedDate! > periodEnd);
 
+  // BRS Row 2(अ): issued during the selected month but not cleared by month-end.
   const unpresentedChequeRows = chequeRows.filter(
     (cheque) =>
       cheque.direction === "issued" &&
       cheque.chequeDate >= periodStart &&
       cheque.chequeDate <= periodEnd &&
-      (cheque.status === "pending" ||
-        (cheque.status === "cleared" &&
-          Boolean(cheque.clearedDate) &&
-          cheque.clearedDate! > periodEnd)),
+      isUnclearedAtMonthEnd(cheque),
   );
-  const unclearedDepositRows = entriesToMonthEnd.filter(
-    (entry) =>
-      entry.entryType === "receipt" &&
-      entry.mode === "cheque" &&
-      notClearedByMonthEnd(entry),
+  // BRS Row 5(अ): received/deposited cheques still uncleared at month-end.
+  const unclearedDepositRows = chequeRows.filter(
+    (cheque) =>
+      cheque.direction === "received" &&
+      cheque.chequeDate <= periodEnd &&
+      isUnclearedAtMonthEnd(cheque),
   );
+  const unclearedChequeRows = [
+    ...unpresentedChequeRows.map((cheque) => ({
+      ...cheque,
+      brsRow: "2(अ)",
+      treatment: "Add / जोड़िये",
+    })),
+    ...unclearedDepositRows.map((cheque) => ({
+      ...cheque,
+      brsRow: "5(अ)",
+      treatment: "Less / घटाइये",
+    })),
+  ].sort((a, b) => a.chequeDate.localeCompare(b.chequeDate));
   const unpresentedCheques = unpresentedChequeRows.reduce(
     (sum, cheque) => sum + num(cheque.amount),
     0,
   );
   const unclearedDeposits = unclearedDepositRows.reduce(
-    (sum, entry) => sum + num(entry.amount),
+    (sum, cheque) => sum + num(cheque.amount),
     0,
   );
 
@@ -169,21 +197,24 @@ export default async function BRSPage({
     num(statement?.otherExpenses);
   const calculatedBalance =
     cashbookBalance + unpresentedCheques - unclearedDeposits + adjustmentTotal;
-  const difference = calculatedBalance - num(statement?.passbookBalance);
-  const pending = entriesToMonthEnd.filter(notClearedByMonthEnd);
-  const cleared = entriesToMonthEnd.filter(
-    (entry) =>
-      entry.reconciled &&
-      entry.reconciledDate !== null &&
-      entry.reconciledDate <= periodEnd,
-  );
+  const difference = num(statement?.passbookBalance) - calculatedBalance;
+  const differenceStatus =
+    difference > 0.005
+      ? "BANK SURPLUS (+)"
+      : difference < -0.005
+        ? "BANK NEGATIVE (-)"
+        : "MATCHED";
+  const differenceDisplay =
+    Math.abs(difference) < 0.005
+      ? inr(0)
+      : `${difference > 0 ? "+" : "−"} ${inr(Math.abs(difference))}`;
 
   return (
-    <div>
+    <div className="min-w-0 max-w-full overflow-hidden">
       <PageHeader
-        title="Combined Bank Reconciliation Statement (BRS)"
-        hindi="संयुक्त बैंक समाधान विवरण"
-        subtitle="All APMC bank accounts combined; Cashbook bank closing and pending cheques sync automatically"
+        title="Bank Reconciliation Statement (BRS)"
+        hindi="बैंक समाधान विवरण"
+        subtitle="Combined bank closing with uncleared issued/received cheques auto-synced only from Cheque Register"
       />
 
       <form
@@ -231,7 +262,7 @@ export default async function BRSPage({
                   All APMC Bank Accounts — Combined ({banks.length})
                 </p>
                 <p className="mt-1 text-xs text-blue-700">
-                  Row 1 = Cashbook Closing Balance of combined Bank Column. Row 2(अ) = all pending issued cheques from Cheque Register.
+                  Row 1 = Cashbook Closing Bank Column. Row 2(अ) = pending issued cheques; Row 5(अ) = pending received cheques. Both sync automatically only from Cheque Register.
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-3">
@@ -245,9 +276,27 @@ export default async function BRSPage({
                   </Link>
                 )}
                 <div className="text-right">
-                  <p className="text-xs font-semibold uppercase text-blue-700">Difference</p>
-                  <p className={`text-lg font-bold ${Math.abs(difference) < 0.01 ? "text-emerald-700" : "text-red-700"}`}>
-                    {inr(difference)}
+                  <p
+                    className={`text-xs font-bold uppercase ${
+                      difference > 0.005
+                        ? "text-emerald-700"
+                        : difference < -0.005
+                          ? "text-red-700"
+                          : "text-blue-700"
+                    }`}
+                  >
+                    {differenceStatus}
+                  </p>
+                  <p
+                    className={`text-lg font-bold ${
+                      difference > 0.005
+                        ? "text-emerald-700"
+                        : difference < -0.005
+                          ? "text-red-700"
+                          : "text-blue-700"
+                    }`}
+                  >
+                    {differenceDisplay}
                   </p>
                 </div>
               </div>
@@ -284,33 +333,61 @@ export default async function BRSPage({
             }}
           />
 
-          <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-2">
-            <Card title={`Pending Issued Cheques · Row 2(अ) (${unpresentedChequeRows.length})`}>
+          <div className="mt-6 space-y-6">
+            <Card
+              title={`Cheque Register — Uncleared Cheques Auto Sync (${unclearedChequeRows.length})`}
+              className="min-w-0"
+            >
+              <div className="mb-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+                यहाँ manual reconciliation नहीं है। Cheque Register में status Pending/Cleared बदलते ही BRS real-time update होगा।
+              </div>
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[620px]">
+                <table className="w-full min-w-[680px] table-fixed">
                   <thead>
                     <tr>
+                      <Th>BRS Row</Th>
                       <Th>Cheque / Date</Th>
                       <Th>Bank</Th>
                       <Th>Party</Th>
-                      <Th>Status</Th>
+                      <Th>Direction</Th>
                       <Th right>Amount</Th>
                     </tr>
                   </thead>
                   <tbody>
-                    {unpresentedChequeRows.length === 0 && (
-                      <EmptyRow colSpan={5} message="इस माह कोई pending issued cheque नहीं है।" />
+                    {unclearedChequeRows.length === 0 && (
+                      <EmptyRow
+                        colSpan={6}
+                        message="Cheque Register में selected month-end तक कोई uncleared cheque नहीं है।"
+                      />
                     )}
-                    {unpresentedChequeRows.map((cheque) => (
-                      <tr key={cheque.id} className="hover:bg-slate-50">
+                    {unclearedChequeRows.map((cheque) => (
+                      <tr key={`${cheque.direction}-${cheque.id}`} className="hover:bg-slate-50">
+                        <Td>
+                          <Badge color={cheque.brsRow === "2(अ)" ? "green" : "amber"}>
+                            {cheque.brsRow} · {cheque.treatment}
+                          </Badge>
+                        </Td>
                         <Td>
                           <span className="font-semibold">{cheque.chequeNo}</span>
-                          <br /><span className="text-xs text-slate-500">{fmtDate(cheque.chequeDate)}</span>
+                          <br />
+                          <span className="text-xs text-slate-500">
+                            {fmtDate(cheque.chequeDate)}
+                          </span>
                         </Td>
-                        <Td>{bankMap.get(cheque.bankAccountId)?.bankName ?? "-"}</Td>
-                        <Td>{cheque.partyName}</Td>
-                        <Td><Badge color="amber">Pending</Badge></Td>
-                        <Td right className="font-bold text-amber-700">{inr(cheque.amount)}</Td>
+                        <Td className="whitespace-normal break-words">
+                          {bankMap.get(cheque.bankAccountId)?.bankName ?? "-"}
+                        </Td>
+                        <Td className="whitespace-normal break-words">
+                          {cheque.partyName}
+                        </Td>
+                        <Td>
+                          <Badge color={cheque.direction === "issued" ? "blue" : "green"}>
+                            {cheque.direction}
+                          </Badge>
+                        </Td>
+                        <Td right className="font-bold text-amber-700">
+                          {inr(cheque.amount)}
+                        </Td>
                       </tr>
                     ))}
                   </tbody>
@@ -318,9 +395,12 @@ export default async function BRSPage({
               </div>
             </Card>
 
-            <Card title={`Saved Combined Monthly BRS (${savedStatements.length})`}>
+            <Card
+              title={`Saved Combined Monthly BRS (${savedStatements.length})`}
+              className="min-w-0"
+            >
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[540px]">
+                <table className="w-full min-w-[520px] table-fixed">
                   <thead>
                     <tr>
                       <Th>Month</Th>
@@ -338,6 +418,7 @@ export default async function BRSPage({
                         <Td>
                           <Link
                             href={`/brs?month=${savedStatement.statementMonth}`}
+                            prefetch={false}
                             className="font-semibold text-blue-700 hover:underline"
                           >
                             {monthLabel(savedStatement.statementMonth)}
@@ -350,6 +431,7 @@ export default async function BRSPage({
                         <Td>
                           <Link
                             href={`/brs/print?month=${savedStatement.statementMonth}`}
+                            prefetch={false}
                             className="whitespace-nowrap text-xs font-semibold text-emerald-700"
                           >
                             🖨️ PDF / Print
@@ -363,67 +445,7 @@ export default async function BRSPage({
             </Card>
           </div>
 
-          <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-2">
-            <Card title={`Unreconciled Combined Bank Items (${pending.length})`}>
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[680px]">
-                  <thead>
-                    <tr>
-                      <Th>Date</Th><Th>Bank</Th><Th>Voucher / Particulars</Th>
-                      <Th>Type</Th><Th right>Amount</Th><Th>Clear On</Th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {pending.length === 0 && <EmptyRow colSpan={6} message="All bank entries reconciled ✓" />}
-                    {pending.map((entry) => (
-                      <tr key={entry.id} className="hover:bg-slate-50">
-                        <Td>{fmtDate(entry.entryDate)}</Td>
-                        <Td>{entry.bankAccountId ? bankMap.get(entry.bankAccountId)?.bankName ?? "-" : "-"}</Td>
-                        <Td className="max-w-60 whitespace-normal"><b>{entry.voucherNo}</b> · {entry.particulars}</Td>
-                        <Td><Badge color={entry.entryType === "receipt" ? "green" : "red"}>{entry.entryType} · {entry.mode}</Badge></Td>
-                        <Td right className="font-semibold">{inr(entry.amount)}</Td>
-                        <Td>
-                          <PinProtectedForm action={reconcileEntry} className="flex min-w-48 gap-1">
-                            <input type="hidden" name="id" value={entry.id} />
-                            <input type="date" name="reconciledDate" min={entry.entryDate} defaultValue={todayISO()} required className="min-w-0 rounded border border-slate-300 px-2 py-1 text-xs" />
-                            <button className="rounded bg-emerald-600 px-2 py-1 text-xs font-semibold text-white">Clear</button>
-                          </PinProtectedForm>
-                        </Td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
 
-            <Card title={`Reconciled Combined Bank Items (${cleared.length})`}>
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[600px]">
-                  <thead>
-                    <tr><Th>Date</Th><Th>Bank</Th><Th>Voucher / Particulars</Th><Th>Cleared On</Th><Th right>Amount</Th><Th>Action</Th></tr>
-                  </thead>
-                  <tbody>
-                    {cleared.length === 0 && <EmptyRow colSpan={6} message="Nothing reconciled for this month." />}
-                    {cleared.map((entry) => (
-                      <tr key={entry.id} className="hover:bg-slate-50">
-                        <Td>{fmtDate(entry.entryDate)}</Td>
-                        <Td>{entry.bankAccountId ? bankMap.get(entry.bankAccountId)?.bankName ?? "-" : "-"}</Td>
-                        <Td className="max-w-60 whitespace-normal"><b>{entry.voucherNo}</b> · {entry.particulars}</Td>
-                        <Td>{fmtDate(entry.reconciledDate)}</Td>
-                        <Td right className="font-semibold">{inr(entry.amount)}</Td>
-                        <Td>
-                          <PinProtectedForm action={unreconcileEntry}>
-                            <input type="hidden" name="id" value={entry.id} />
-                            <button className="text-xs font-semibold text-amber-700">Undo</button>
-                          </PinProtectedForm>
-                        </Td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
-          </div>
         </>
       )}
     </div>

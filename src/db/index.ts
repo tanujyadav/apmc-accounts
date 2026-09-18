@@ -15,6 +15,13 @@ export const pool =
   globalForDb.__arenaNextJsPostgresqlPool ??
   new Pool({
     connectionString: databaseUrl,
+    max: 10,
+    min: 1,
+    idleTimeoutMillis: 30_000,
+    connectionTimeoutMillis: 5_000,
+    keepAlive: true,
+    keepAliveInitialDelayMillis: 10_000,
+    application_name: "apmc-accounts-web",
   });
 
 if (process.env.NODE_ENV !== "production") {

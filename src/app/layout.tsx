@@ -1,8 +1,7 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import AppShell from "@/components/AppShell";
-import { db } from "@/db";
-import { apmcProfile } from "@/db/schema";
+import { getApmcProfile } from "@/lib/profile";
 import "./globals.css";
 
 // The Mandi name in the sidebar is live data, and every page needs a real
@@ -26,7 +25,7 @@ export const metadata: Metadata = {
 export default async function RootLayout({ children }: { children: ReactNode }) {
   let apmcName = "APMC Profile Not Set";
   try {
-    const [profile] = await db.select().from(apmcProfile).limit(1);
+    const profile = await getApmcProfile();
     if (profile?.mandiName) apmcName = profile.mandiName;
   } catch {
     // Sidebar name is cosmetic — don't take down every page over it.

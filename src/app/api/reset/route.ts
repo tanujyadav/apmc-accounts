@@ -20,29 +20,51 @@ export async function POST(request: Request) {
       return Response.json({ error: "RESET confirmation is required" }, { status: 400 });
     }
 
-    await pool.query(`
-      TRUNCATE TABLE
-        cash_deposit_allocations,
-        cash_deposits,
-        cashbook_entries,
-        cashbook_opening_balances,
-        brs_statements,
-        cheques,
-        budgets,
-        bills,
-        shop_collections,
-        shops,
-        staff_payments,
-        staff_members,
-        tds_returns,
-        revenue_targets,
-        bank_accounts,
-        parties,
-        apmc_profile
-      RESTART IDENTITY CASCADE
-    `);
-
-    return Response.json({ success: true });
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const before = await client.query<{ count: string }>(
+        "SELECT COUNT(*)::text AS count FROM ledger_heads",
+      );
+      await client.query(`
+        TRUNCATE TABLE
+          cash_deposit_allocations,
+          cash_deposits,
+          cashbook_entries,
+          cashbook_opening_balances,
+          brs_statements,
+          cheques,
+          budgets,
+          bills,
+          bill_number_counters,
+          shop_collections,
+          shops,
+          staff_payments,
+          staff_members,
+          tds_returns,
+          revenue_targets,
+          bank_accounts,
+          parties,
+          apmc_profile
+        RESTART IDENTITY CASCADE
+      `);
+      const after = await client.query<{ count: string }>(
+        "SELECT COUNT(*)::text AS count FROM ledger_heads",
+      );
+      if (before.rows[0]?.count !== after.rows[0]?.count) {
+        throw new Error("Income/Expense Head Master safety check failed");
+      }
+      await client.query("COMMIT");
+      return Response.json({
+        success: true,
+        preservedLedgerHeads: Number(after.rows[0]?.count ?? 0),
+      });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   } catch {
     return Response.json({ error: "Data reset failed" }, { status: 500 });
   }
